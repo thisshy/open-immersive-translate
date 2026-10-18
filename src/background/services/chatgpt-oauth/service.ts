@@ -1,5 +1,9 @@
 import browser from "webextension-polyfill";
 
+import {
+  CHATGPT_FALLBACK_MODELS,
+  DEFAULT_CHATGPT_MODEL,
+} from "../../../shared/chatgpt-models";
 import type { AssistantRequest } from "../../../shared/k-assistant";
 import type {
   RateLimit,
@@ -39,17 +43,7 @@ export const CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
 export const CODEX_RESPONSES_URL = `${CODEX_BASE_URL}/responses`;
 export const CODEX_MODELS_URL = `${CODEX_BASE_URL}/models?client_version=1.0.0`;
 export const CHATGPT_MODELS_STORAGE_KEY = "chatgptOauthModels";
-export const DEFAULT_CHATGPT_MODEL = "gpt-5.4-mini";
-export const CHATGPT_FALLBACK_MODELS = [
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.5",
-  "gpt-5.4-mini",
-  "gpt-5.4",
-  "gpt-5.3-codex",
-  "gpt-5.3-codex-spark",
-] as const;
+export { CHATGPT_FALLBACK_MODELS, DEFAULT_CHATGPT_MODEL };
 
 const MODEL_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
@@ -148,14 +142,10 @@ function parseModels(value: unknown): string[] {
 }
 
 export function selectDefaultChatgptModel(models: readonly string[]): string {
-  return (
-    models.find(
-      (model) =>
-        /^gpt-5(?:\.|-)/.test(model) &&
-        model.includes("mini") &&
-        !model.includes("codex"),
-    ) ?? DEFAULT_CHATGPT_MODEL
-  );
+  // Prefer the latest Sol when offered; otherwise respect the account's catalog.
+  return models.includes(DEFAULT_CHATGPT_MODEL)
+    ? DEFAULT_CHATGPT_MODEL
+    : (models[0] ?? DEFAULT_CHATGPT_MODEL);
 }
 
 export async function getChatgptModels(

@@ -316,8 +316,8 @@ function BasicPanel({ config, onPatch }: PanelProps): preact.JSX.Element {
 function ServicesPanel({ config, onPatch }: PanelProps): preact.JSX.Element {
   const serviceIds = Object.keys(config.services);
   const [selectedService, setSelectedService] = useState(
-    serviceIds.includes("openai-compatible")
-      ? "openai-compatible"
+    serviceIds.includes(config.service)
+      ? config.service
       : (serviceIds[0] ?? ""),
   );
   const service = config.services[selectedService];

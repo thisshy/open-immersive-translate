@@ -10,7 +10,7 @@ import { DEFAULT_SUBTITLE_CONFIG, type SubtitleConfig } from "./subtitle-types";
 import type { Config, ConfigPatch, Rule, ServiceConfig } from "./types";
 
 /** Current persisted configuration format. */
-export const CONFIG_VERSION = 3;
+export const CONFIG_VERSION = 4;
 
 /** Storage key containing the complete configuration object. */
 export const CONFIG_STORAGE_KEY = "config";
@@ -238,7 +238,7 @@ export const configSchema: z.ZodType<Config> = z.object({
   translationMode: z.enum(["dual", "translation"]).default("dual"),
   theme: z.string().default("underline"),
   font: z.string().optional(),
-  service: z.string().default("google"),
+  service: z.string().default("chatgpt"),
   services: z.record(z.string(), serviceConfigSchema).default(DEFAULT_SERVICES),
   shortcuts: z.record(z.string(), z.string()).default(DEFAULT_SHORTCUTS),
   alwaysTranslateSites: z.array(z.string()).default([]),
@@ -342,11 +342,11 @@ export const configSchema: z.ZodType<Config> = z.object({
   sidePanel: z
     .object({
       enabled: z.boolean().default(true),
-      service: z.string().optional(),
+      service: z.string().default("chatgpt"),
       targetLanguage: langCodeSchema.optional(),
       historyLimit: z.number().int().positive().default(50),
     })
-    .default({ enabled: true, historyLimit: 50 }),
+    .default({ enabled: true, service: "chatgpt", historyLimit: 50 }),
   aiWriting: z
     .object({
       enabled: z.boolean().default(true),
@@ -568,6 +568,17 @@ registerConfigMigration(2, (config) => {
     },
   };
 });
+
+// Apply this installation's requested default once, preserving account settings.
+registerConfigMigration(3, (config) => ({
+  ...config,
+  version: 4,
+  service: "chatgpt",
+  sidePanel: {
+    ...(isRecord(config.sidePanel) ? config.sidePanel : {}),
+    service: "chatgpt",
+  },
+}));
 
 /** Upgrade unknown stored data and validate it as the current configuration. */
 export function migrateConfig(value: unknown): Config {

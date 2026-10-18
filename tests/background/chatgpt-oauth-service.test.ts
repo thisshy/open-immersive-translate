@@ -114,15 +114,15 @@ describe("ChatgptOauthService", () => {
     });
   });
 
-  it("selects the first non-Codex GPT-5 mini model", () => {
+  it("selects the latest Sol only when available in the account catalog", () => {
     expect(
-      selectDefaultChatgptModel([
-        "gpt-5.3-codex-mini",
-        "gpt-5.6-mini",
-        "gpt-5.4-mini",
-      ]),
-    ).toBe("gpt-5.6-mini");
-    expect(selectDefaultChatgptModel(["gpt-5.3-codex"])).toBe("gpt-5.4-mini");
+      selectDefaultChatgptModel(["gpt-6-luna", "gpt-6.1-sol", "gpt-5.6-sol"]),
+    ).toBe("gpt-6.1-sol");
+    expect(selectDefaultChatgptModel(["gpt-6-luna"])).toBe("gpt-6-luna");
+    expect(selectDefaultChatgptModel(["account-specific-model"])).toBe(
+      "account-specific-model",
+    );
+    expect(selectDefaultChatgptModel([])).toBe("gpt-6.1-sol");
   });
 
   it("probes and caches the account model catalog", async () => {

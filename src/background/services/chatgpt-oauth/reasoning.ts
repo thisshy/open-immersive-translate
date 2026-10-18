@@ -11,12 +11,17 @@ export const EFFORT_LADDER = [
 ] as const satisfies readonly ReasoningEffort[];
 
 const LEGACY_EFFORTS = EFFORT_LADDER.slice(0, -1);
+const REASONING_REQUIRED_EFFORTS = EFFORT_LADDER.slice(1);
 
 /** Return the reasoning vocabulary accepted by a Codex Responses model. */
 export function supportedEfforts(
   model: string | undefined,
 ): readonly ReasoningEffort[] {
-  return model?.toLowerCase().includes("gpt-5.6")
+  const normalized = model?.toLowerCase() ?? "";
+  if (/^gpt-(?:6\.1-sol|6-astra)(?:-|$)/.test(normalized)) {
+    return REASONING_REQUIRED_EFFORTS;
+  }
+  return /^gpt-(?:6-(?:sol|luna)|5\.6(?:[.-]|$))/.test(normalized)
     ? EFFORT_LADDER
     : LEGACY_EFFORTS;
 }

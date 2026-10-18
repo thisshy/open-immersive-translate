@@ -68,6 +68,7 @@ afterEach(() => {
 
 describe("Options", () => {
   it("renders tabs and persists general and service settings", async () => {
+    stored.service = "openai-compatible";
     render(<Options />);
 
     await screen.findByRole("heading", { name: "基本", level: 2 });
@@ -86,6 +87,7 @@ describe("Options", () => {
   });
 
   it("sends service connection tests and displays the result", async () => {
+    stored.service = "openai-compatible";
     browserMock.runtime.sendMessage.mockResolvedValue({
       ok: true,
       latencyMs: 18,
@@ -329,7 +331,7 @@ describe("Options", () => {
     });
 
     fireEvent.input(screen.getByLabelText("模型"), {
-      target: { value: "gpt-5.6-sol" },
+      target: { value: "gpt-6.1-sol" },
     });
     await waitFor(() =>
       expect(
@@ -344,6 +346,12 @@ describe("Options", () => {
     await waitFor(() =>
       expect(stored.services.chatgpt?.reasoningEffort).toBe("max"),
     );
+    expect(
+      within(screen.getByLabelText("翻译思考强度")).queryByRole("option", {
+        name: "无",
+      }),
+    ).toBeNull();
+    expect(stored.services.chatgpt?.model).toBe("gpt-6.1-sol");
   });
 
   it("shows a pending ChatGPT device code and login link", async () => {

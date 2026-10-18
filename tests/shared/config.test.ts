@@ -10,6 +10,42 @@ import {
 } from "../../src/shared/config";
 
 describe("configuration migration", () => {
+  it("defaults to ChatGPT OAuth and migrates existing service choices once", () => {
+    expect(DEFAULT_CONFIG.service).toBe("chatgpt");
+    expect(DEFAULT_CONFIG.sidePanel.service).toBe("chatgpt");
+    const previous = {
+      ...DEFAULT_CONFIG,
+      version: 3,
+      service: "google",
+      sidePanel: {
+        ...DEFAULT_CONFIG.sidePanel,
+        service: "openai-compatible",
+        targetLanguage: "en" as const,
+        historyLimit: 23,
+      },
+      services: {
+        ...DEFAULT_CONFIG.services,
+        chatgpt: {
+          kind: "chatgpt" as const,
+          enabled: true,
+          model: "gpt-5.6-sol",
+        },
+      },
+    };
+    const migrated = migrateConfig(previous);
+    expect(migrated.version).toBe(CONFIG_VERSION);
+    expect(migrated.service).toBe("chatgpt");
+    expect(migrated.sidePanel).toMatchObject({
+      service: "chatgpt",
+      targetLanguage: "en",
+      historyLimit: 23,
+    });
+    expect(migrated.services.chatgpt).toMatchObject(previous.services.chatgpt);
+    expect(migrateConfig({ ...migrated, service: "google" }).service).toBe(
+      "google",
+    );
+  });
+
   it("applies and validates ChatGPT reasoning defaults", () => {
     expect(serviceConfigSchema.parse({ kind: "chatgpt" })).toMatchObject({
       reasoningEffort: "low",
