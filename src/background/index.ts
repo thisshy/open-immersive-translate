@@ -351,6 +351,8 @@ browser.runtime.onConnect.addListener((port) => {
       .finally(() => controllers.delete(requestId));
   });
   port.onDisconnect.addListener(() => {
+    // Navigation/BFCache may close a port with a runtime.lastError attached.
+    void browser.runtime.lastError;
     disconnected = true;
     for (const controller of controllers.values()) controller.abort();
     controllers.clear();

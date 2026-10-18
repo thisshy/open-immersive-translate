@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createAssistantClient,
   runAssistant,
   type AssistantClient,
   type AssistantRequest,
@@ -13,6 +14,43 @@ const request: AssistantRequest = {
   from: "en",
   to: "zh-CN",
 };
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("assistant runtime port", () => {
+  it("reads the Chrome disconnect error and rejects the interrupted stream", async () => {
+    let onDisconnect: (() => void) | undefined;
+    const lastError = vi.fn(() => ({
+      message: "Back/forward cache closed the port.",
+    }));
+    const port = {
+      postMessage: vi.fn(),
+      disconnect: vi.fn(),
+      onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+      onDisconnect: {
+        addListener: (listener: () => void) => {
+          onDisconnect = listener;
+        },
+      },
+    };
+    vi.stubGlobal("chrome", {
+      runtime: {
+        get lastError() {
+          return lastError();
+        },
+        connect: () => port,
+      },
+    });
+    const stream = createAssistantClient().stream!(request, vi.fn());
+    const rejected = expect(stream).rejects.toThrow(
+      "Back/forward cache closed the port.",
+    );
+    onDisconnect?.();
+    await rejected;
+    expect(lastError).toHaveBeenCalledOnce();
+    expect(port.onMessage.removeListener).toHaveBeenCalledOnce();
+  });
+});
 
 describe("runAssistant", () => {
   it("uses partial output for a streaming adapter", async () => {

@@ -459,8 +459,13 @@ function wrapPort<Outbound, Inbound>(
       return () => port.onMessage.removeListener(rawListener);
     },
     onDisconnect: (listener) => {
-      port.onDisconnect.addListener(listener);
-      return () => port.onDisconnect.removeListener(listener);
+      const rawListener = (): void => {
+        // Chrome requires lastError to be read synchronously on disconnection.
+        void browser.runtime.lastError;
+        listener();
+      };
+      port.onDisconnect.addListener(rawListener);
+      return () => port.onDisconnect.removeListener(rawListener);
     },
     disconnect: () => port.disconnect(),
   };

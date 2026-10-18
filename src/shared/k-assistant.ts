@@ -49,6 +49,7 @@ interface RuntimePort {
 }
 
 interface RuntimeApi {
+  readonly lastError?: { message?: string };
   sendMessage(message: unknown): Promise<unknown>;
   connect(options: { name: string }): RuntimePort;
 }
@@ -127,8 +128,13 @@ export function createAssistantClient(): AssistantClient {
 
         port.onMessage.addListener(onMessage);
         port.onDisconnect.addListener(() => {
+          const error = runtimeApi().lastError;
           port.onMessage.removeListener(onMessage);
-          if (!complete) reject(new Error("Assistant stream disconnected."));
+          if (!complete) {
+            reject(
+              new Error(error?.message ?? "Assistant stream disconnected."),
+            );
+          }
         });
         port.postMessage({ type: "assistantRequest", requestId, request });
       });
