@@ -106,7 +106,9 @@ const zhCN = {
   "oauth.loggedIn": "已登录 ChatGPT",
   "oauth.email": "账号",
   "oauth.plan": "套餐",
-  "oauth.expiry": "访问令牌到期时间",
+  "oauth.expiry": "本次令牌到期（自动续期）",
+  "oauth.autoRefresh":
+    "扩展会在令牌到期前自动续期。此日期不是登录截止时间；只有授权失效时才需重新登录。",
   "oauth.logout": "退出登录",
   "oauth.retry": "重新登录",
   "oauth.statusFailed": "无法读取 ChatGPT 登录状态",
@@ -368,7 +370,9 @@ const en: Record<I18nKey, string> = {
   "oauth.loggedIn": "Logged in to ChatGPT",
   "oauth.email": "Account",
   "oauth.plan": "Plan",
-  "oauth.expiry": "Access token expires",
+  "oauth.expiry": "Current token expires (auto-renewed)",
+  "oauth.autoRefresh":
+    "The extension renews tokens before expiry. This is not a sign-out date; sign in again only if authorization becomes invalid.",
   "oauth.logout": "Log out",
   "oauth.retry": "Log in again",
   "oauth.statusFailed": "Could not read ChatGPT login status",

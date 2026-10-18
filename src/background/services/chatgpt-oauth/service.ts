@@ -309,7 +309,7 @@ export class ChatgptOauthService extends BaseService {
       this.id,
     );
     if (response.status === 401) {
-      tokens = await refreshChatgptOauthTokens();
+      tokens = await refreshChatgptOauthTokens({}, tokens.accessToken);
       response = await fetchWithTimeout(
         CODEX_RESPONSES_URL,
         {

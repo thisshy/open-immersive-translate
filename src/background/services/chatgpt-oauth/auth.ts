@@ -17,11 +17,25 @@ export const CODEX_DEVICE_REDIRECT_URL =
   "https://auth.openai.com/deviceauth/callback";
 export const CHATGPT_AUTH_STORAGE_KEY = "chatgptOauthAuth";
 export const CHATGPT_AUTH_ALARM = "chatgptOauth.poll";
+export const CHATGPT_REFRESH_ALARM = "chatgptOauth.refresh";
 
 const AUTH_CLAIM = "https://api.openai.com/auth";
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1_000;
 const REFRESH_SKEW_SECONDS = 120;
 const MAX_DEVICE_CODE_ATTEMPTS = 4;
+const MAX_REFRESH_INTERVAL_MS = 7 * 24 * 60 * 60 * 1_000;
+const REFRESH_RETRY_MS = 5 * 60 * 1_000;
+const TERMINAL_REFRESH_ERRORS = new Set([
+  "invalid_grant",
+  "invalid_refresh_token",
+  "token_expired",
+  "refresh_token_expired",
+  "refresh_token_invalidated",
+  "refresh_token_reused",
+]);
+
+let refreshInFlight: Promise<ChatgptOauthTokens> | undefined;
+let credentialGeneration = 0;
 
 export interface ChatgptOauthTokens {
   accessToken: string;
@@ -134,6 +148,25 @@ async function readState(): Promise<StoredAuthState> {
 
 async function writeState(state: StoredAuthState): Promise<void> {
   await browser.storage.local.set({ [CHATGPT_AUTH_STORAGE_KEY]: state });
+  if (state.tokens) await scheduleRefresh(state.tokens);
+  else await browser.alarms.clear(CHATGPT_REFRESH_ALARM);
+}
+
+function nextRefreshAt(tokens: ChatgptOauthTokens): number {
+  const exp = decodeJwtClaims(tokens.accessToken)?.exp;
+  return Math.min(
+    typeof exp === "number" ? (exp - REFRESH_SKEW_SECONDS) * 1_000 : Infinity,
+    tokens.obtainedAt + MAX_REFRESH_INTERVAL_MS,
+  );
+}
+
+async function scheduleRefresh(
+  tokens: ChatgptOauthTokens,
+  now = Date.now(),
+): Promise<void> {
+  await browser.alarms.create(CHATGPT_REFRESH_ALARM, {
+    when: Math.max(now + 60_000, nextRefreshAt(tokens)),
+  });
 }
 
 function decodeBase64Url(value: string): string {
@@ -436,6 +469,7 @@ async function exchangeAuthorizationCode(
     obtainedAt: runtime.now(),
   };
   await clearPoll();
+  credentialGeneration += 1;
   await writeState({ tokens });
   return statusFromState({ tokens });
 }
@@ -523,15 +557,35 @@ export async function cancelChatgptOauth(): Promise<ChatgptOauthStatus> {
 }
 
 export async function logoutChatgptOauth(): Promise<ChatgptOauthStatus> {
+  credentialGeneration += 1;
   await clearPoll();
   await browser.storage.local.remove(CHATGPT_AUTH_STORAGE_KEY);
+  await browser.alarms.clear(CHATGPT_REFRESH_ALARM);
   return { state: "logged_out" };
 }
 
-export async function refreshChatgptOauthTokens(
+/** Share one rotating-token exchange across translations and background maintenance. */
+export function refreshChatgptOauthTokens(
   overrides: Partial<AuthDependencies> = {},
+  previousAccessToken?: string,
+): Promise<ChatgptOauthTokens> {
+  if (!refreshInFlight) {
+    refreshInFlight = performTokenRefresh(
+      overrides,
+      previousAccessToken,
+    ).finally(() => {
+      refreshInFlight = undefined;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function performTokenRefresh(
+  overrides: Partial<AuthDependencies> = {},
+  previousAccessToken?: string,
 ): Promise<ChatgptOauthTokens> {
   const runtime = dependencies(overrides);
+  const generation = credentialGeneration;
   const state = await readState();
   const tokens = state.tokens;
   if (!tokens?.refreshToken) {
@@ -540,10 +594,15 @@ export async function refreshChatgptOauthTokens(
       retryable: false,
     });
   }
+  // Another request may already have replaced the token rejected by a late 401.
+  if (previousAccessToken && tokens.accessToken !== previousAccessToken) {
+    return tokens;
+  }
   let response: Response;
   try {
     response = await runtime.fetch(CODEX_OAUTH_TOKEN_URL, {
       method: "POST",
+      signal: AbortSignal.timeout(20_000),
       headers: {
         Accept: "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
@@ -570,7 +629,40 @@ export async function refreshChatgptOauthTokens(
       },
     });
   }
+  if (response.status >= 500) {
+    throw new TranslateError(
+      "network",
+      "ChatGPT 续期服务暂时不可用，将自动重试。",
+      {
+        serviceId: "chatgpt",
+        details: { status: response.status },
+      },
+    );
+  }
   if (!response.ok) {
+    const payload: unknown = await response
+      .clone()
+      .json()
+      .catch(() => undefined);
+    const code = isRecord(payload)
+      ? typeof payload.error === "string"
+        ? payload.error
+        : isRecord(payload.error)
+          ? payload.error.code
+          : payload.code
+      : undefined;
+    if (typeof code === "string" && TERMINAL_REFRESH_ERRORS.has(code)) {
+      const current = await readState();
+      if (
+        generation === credentialGeneration &&
+        current.tokens?.refreshToken === tokens.refreshToken
+      ) {
+        await writeState({
+          ...(current.pending ? { pending: current.pending } : {}),
+          error: { message: "ChatGPT 授权已失效，请重新登录。" },
+        });
+      }
+    }
     throw new TranslateError(
       "auth",
       await responseMessage(
@@ -615,8 +707,53 @@ export async function refreshChatgptOauthTokens(
       tokens.tokenType,
     obtainedAt: runtime.now(),
   };
-  await writeState({ tokens: refreshed });
+  const current = await readState();
+  if (
+    generation !== credentialGeneration ||
+    current.tokens?.refreshToken !== tokens.refreshToken
+  ) {
+    throw new TranslateError("auth", "登录状态已更改，请重试。", {
+      serviceId: "chatgpt",
+      retryable: false,
+    });
+  }
+  await writeState({ ...current, tokens: refreshed, error: undefined });
   return refreshed;
+}
+
+/** Renew before expiry, recover after browser restarts, and retain credentials offline. */
+export async function maintainChatgptOauthTokens(
+  overrides: Partial<AuthDependencies> = {},
+): Promise<void> {
+  const runtime = dependencies(overrides);
+  const tokens = (await readState()).tokens;
+  if (!tokens) {
+    await browser.alarms.clear(CHATGPT_REFRESH_ALARM);
+    return;
+  }
+  if (nextRefreshAt(tokens) > runtime.now()) {
+    await scheduleRefresh(tokens, runtime.now());
+    return;
+  }
+  try {
+    await refreshChatgptOauthTokens(runtime, tokens.accessToken);
+  } catch (error) {
+    // Only a confirmed terminal refresh error clears credentials. Network failures retry.
+    if (!(await readState()).tokens) return;
+    const retryAfter =
+      error instanceof TranslateError &&
+      isRecord(error.details) &&
+      typeof error.details.retryAfter === "number"
+        ? error.details.retryAfter
+        : 0;
+    const delay =
+      error instanceof TranslateError && error.code === "AUTH"
+        ? 24 * 60 * 60 * 1_000
+        : REFRESH_RETRY_MS;
+    await browser.alarms.create(CHATGPT_REFRESH_ALARM, {
+      when: runtime.now() + Math.max(delay, retryAfter * 1_000),
+    });
+  }
 }
 
 export async function getValidChatgptOauthTokens(
@@ -630,8 +767,8 @@ export async function getValidChatgptOauthTokens(
       retryable: false,
     });
   }
-  return isAccessTokenExpiring(tokens.accessToken, runtime.now())
-    ? refreshChatgptOauthTokens(runtime)
+  return nextRefreshAt(tokens) <= runtime.now()
+    ? refreshChatgptOauthTokens(runtime, tokens.accessToken)
     : tokens;
 }
 
@@ -682,6 +819,7 @@ export async function importCodexCliAuth(
     obtainedAt: now,
   };
   await clearPoll();
+  credentialGeneration += 1;
   await writeState({ tokens });
   return statusFromState({ tokens });
 }
@@ -700,14 +838,17 @@ export function registerChatgptOauthPolling(): () => void {
   const onAlarm = (alarm: browser.Alarms.Alarm): void => {
     if (alarm.name === CHATGPT_AUTH_ALARM) {
       void pollChatgptOauth().catch(console.error);
+    } else if (alarm.name === CHATGPT_REFRESH_ALARM) {
+      void maintainChatgptOauthTokens().catch(console.error);
     }
   };
   const onStartup = (): void => {
     void resumeChatgptOauthPolling().catch(console.error);
+    void maintainChatgptOauthTokens().catch(console.error);
   };
   browser.alarms.onAlarm.addListener(onAlarm);
   browser.runtime.onStartup.addListener(onStartup);
-  void resumeChatgptOauthPolling().catch(console.error);
+  onStartup();
   return () => {
     browser.alarms.onAlarm.removeListener(onAlarm);
     browser.runtime.onStartup.removeListener(onStartup);

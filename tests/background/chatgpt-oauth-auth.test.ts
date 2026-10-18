@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({ stored: {} as Record<string, unknown> }));
 const alarmListeners = vi.hoisted(
@@ -46,6 +46,7 @@ vi.mock("webextension-polyfill", () => ({ default: browserMock }));
 import {
   CHATGPT_AUTH_ALARM,
   CHATGPT_AUTH_STORAGE_KEY,
+  CHATGPT_REFRESH_ALARM,
   CODEX_DEVICE_CODE_URL,
   CODEX_DEVICE_TOKEN_URL,
   CODEX_OAUTH_TOKEN_URL,
@@ -54,6 +55,8 @@ import {
   getChatgptOauthStatus,
   importCodexCliAuth,
   isAccessTokenExpiring,
+  logoutChatgptOauth,
+  maintainChatgptOauthTokens,
   pollChatgptOauth,
   registerChatgptOauthPolling,
   refreshChatgptOauthTokens,
@@ -94,6 +97,8 @@ beforeEach(() => {
   startupListeners.clear();
   vi.clearAllMocks();
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("ChatGPT OAuth device flow", () => {
   it("starts, polls, exchanges, and stores a successful login", async () => {
@@ -297,6 +302,180 @@ describe("ChatGPT OAuth tokens", () => {
       code: "RATE_LIMIT",
       details: { status: 429, retryAfter: 9 },
     });
+    await expect(
+      refreshChatgptOauthTokens({
+        fetch: vi.fn(async () => jsonResponse({}, 503)),
+      }),
+    ).rejects.toMatchObject({ code: "NETWORK", retryable: true });
+  });
+
+  it("shares rotating refreshes and ignores late 401s for a replaced access token", async () => {
+    const now = Date.now();
+    const oldAccessToken = jwt({ exp: now / 1_000 - 1 });
+    const accessToken = jwt({ exp: now / 1_000 + 3_600 });
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = {
+      tokens: {
+        accessToken: oldAccessToken,
+        refreshToken: "refresh-old",
+        obtainedAt: now,
+      },
+    };
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ access_token: accessToken, refresh_token: "refresh-new" }),
+    );
+    const first = refreshChatgptOauthTokens({ fetch: fetchMock });
+    const second = refreshChatgptOauthTokens({ fetch: fetchMock });
+    expect(first).toBe(second);
+    await expect(first).resolves.toMatchObject({
+      accessToken,
+      refreshToken: "refresh-new",
+    });
+    await expect(second).resolves.toMatchObject({ accessToken });
+    await expect(
+      refreshChatgptOauthTokens({ fetch: fetchMock }, oldAccessToken),
+    ).resolves.toMatchObject({ accessToken });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("schedules before expiry and renews long-lived tokens without a translation", async () => {
+    const now = Date.now();
+    const accessToken = jwt({ exp: now / 1_000 + 3_600 });
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = {
+      tokens: { accessToken, refreshToken: "refresh-old", obtainedAt: now },
+    };
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ access_token: accessToken, refresh_token: "refresh-new" }),
+    );
+    await maintainChatgptOauthTokens({ fetch: fetchMock, now: () => now });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browserMock.alarms.create).toHaveBeenCalledWith(
+      CHATGPT_REFRESH_ALARM,
+      {
+        when: now + (3_600 - 120) * 1_000,
+      },
+    );
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = {
+      tokens: {
+        accessToken,
+        refreshToken: "refresh-old",
+        obtainedAt: now - 8 * 24 * 60 * 60 * 1_000,
+      },
+    };
+    await maintainChatgptOauthTokens({ fetch: fetchMock, now: () => now });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(state.stored[CHATGPT_AUTH_STORAGE_KEY]).toMatchObject({
+      tokens: { refreshToken: "refresh-new" },
+    });
+  });
+
+  it("keeps credentials and schedules a retry when the network is unavailable", async () => {
+    const now = Date.now();
+    const tokens = {
+      accessToken: jwt({ exp: now / 1_000 - 1 }),
+      refreshToken: "refresh-old",
+      obtainedAt: now,
+    };
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = { tokens };
+    await maintainChatgptOauthTokens({
+      fetch: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+      now: () => now,
+    });
+    expect(state.stored[CHATGPT_AUTH_STORAGE_KEY]).toEqual({ tokens });
+    expect(browserMock.alarms.create).toHaveBeenCalledWith(
+      CHATGPT_REFRESH_ALARM,
+      {
+        when: now + 5 * 60 * 1_000,
+      },
+    );
+  });
+
+  it("stops renewing a refresh token the server explicitly invalidated", async () => {
+    const now = Date.now();
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = {
+      tokens: {
+        accessToken: jwt({ exp: now / 1_000 - 1 }),
+        refreshToken: "refresh-old",
+        obtainedAt: now,
+      },
+    };
+    await maintainChatgptOauthTokens({
+      fetch: vi.fn(async () => jsonResponse({ error: "invalid_grant" }, 400)),
+    });
+    await expect(getChatgptOauthStatus()).resolves.toMatchObject({
+      state: "error",
+      error: "ChatGPT 授权已失效，请重新登录。",
+    });
+    expect(browserMock.alarms.clear).toHaveBeenCalledWith(
+      CHATGPT_REFRESH_ALARM,
+    );
+    expect(browserMock.alarms.create).not.toHaveBeenCalled();
+  });
+
+  it("does not restore a signed-out session when a refresh response arrives late", async () => {
+    const now = Date.now();
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = {
+      tokens: {
+        accessToken: jwt({ exp: now / 1_000 - 1 }),
+        refreshToken: "refresh-old",
+        obtainedAt: now,
+      },
+    };
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const refresh = refreshChatgptOauthTokens({ fetch: fetchMock });
+    const rejected = expect(refresh).rejects.toMatchObject({ code: "AUTH" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await logoutChatgptOauth();
+    finish(
+      jsonResponse({
+        access_token: jwt({ exp: now / 1_000 + 3_600 }),
+        refresh_token: "refresh-new",
+      }),
+    );
+    await rejected;
+    expect(state.stored[CHATGPT_AUTH_STORAGE_KEY]).toBeUndefined();
+  });
+
+  it("resumes renewal after worker startup and handles the renewal alarm", async () => {
+    const now = Date.now();
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = {
+      tokens: {
+        accessToken: jwt({ exp: now / 1_000 - 1 }),
+        refreshToken: "refresh-old",
+        obtainedAt: now,
+      },
+    };
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        access_token: jwt({ exp: now / 1_000 + 3_600 }),
+        refresh_token: "refresh-new",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const dispose = registerChatgptOauthPolling();
+    await vi.waitFor(() =>
+      expect(state.stored[CHATGPT_AUTH_STORAGE_KEY]).toMatchObject({
+        tokens: { refreshToken: "refresh-new" },
+      }),
+    );
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = {
+      tokens: {
+        accessToken: jwt({ exp: now / 1_000 - 1 }),
+        refreshToken: "refresh-new",
+        obtainedAt: now,
+      },
+    };
+    for (const listener of alarmListeners)
+      listener({ name: CHATGPT_REFRESH_ALARM });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    dispose();
   });
 
   it("imports valid Codex CLI JSON and rejects invalid or expired input", async () => {

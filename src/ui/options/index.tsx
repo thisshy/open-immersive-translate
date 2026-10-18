@@ -826,6 +826,7 @@ function ChatgptOauthField({
               </div>
             )}
           </dl>
+          <p class="ui-status">{t("oauth.autoRefresh")}</p>
           <Button
             variant="danger"
             disabled={busy}

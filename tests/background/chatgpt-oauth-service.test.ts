@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({ stored: {} as Record<string, unknown> }));
 const browserMock = vi.hoisted(() => ({
+  alarms: {
+    create: vi.fn(async () => undefined),
+    clear: vi.fn(async () => true),
+  },
   runtime: {
     getManifest: vi.fn(() => ({ version: "1.2.3" })),
   },
