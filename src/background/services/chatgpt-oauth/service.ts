@@ -358,7 +358,12 @@ export class ChatgptOauthService extends BaseService {
       {
         model,
         reasoning: {
-          effort: clampEffort(this.reasoningEffortAssistant, model),
+          effort: clampEffort(
+            request.kind === "translate"
+              ? this.reasoningEffort
+              : this.reasoningEffortAssistant,
+            model,
+          ),
         },
         instructions: assistantInstruction(request),
         input,

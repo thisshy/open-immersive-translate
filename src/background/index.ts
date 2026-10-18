@@ -76,6 +76,12 @@ initTranslationServices();
 registerRemoteRules();
 initPdfInterception();
 registerChatgptOauthPolling();
+// Reapply on every worker start, including extension reload and browser restart.
+void sidePanelApi()
+  ?.setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((error: unknown) => {
+    console.warn("[imt] Side panel action setup failed", error);
+  });
 const pageBadges = new PageBadgeController(actionApi());
 
 async function configuredRule(url: string): Promise<Rule> {
@@ -140,7 +146,9 @@ async function runAssistantRequest(
   request: AssistantRequest,
   signal = new AbortController().signal,
 ): Promise<string> {
+  signal.throwIfAborted();
   const { service, config } = await configuredService(request.service);
+  signal.throwIfAborted();
   if (request.kind === "translate") {
     const result = await service.translate(
       {
@@ -312,10 +320,12 @@ browser.runtime.onConnect.addListener((port) => {
     }
     const requestId = message.requestId;
     const request = message.request as AssistantRequest;
+    const streaming = !("stream" in message) || message.stream !== false;
     const controller = new AbortController();
     controllers.set(requestId, controller);
     void configuredService(request.service)
       .then(async ({ service }) => {
+        controller.signal.throwIfAborted();
         const emit = (text: string): void => {
           if (!disconnected) {
             port.postMessage({
@@ -326,9 +336,10 @@ browser.runtime.onConnect.addListener((port) => {
             });
           }
         };
-        const text = service.onPartial
-          ? await service.onPartial(request, emit, controller.signal)
-          : await runAssistantRequest(request, controller.signal);
+        const text =
+          streaming && service.onPartial
+            ? await service.onPartial(request, emit, controller.signal)
+            : await runAssistantRequest(request, controller.signal);
         if (!disconnected) {
           port.postMessage({
             type: "assistantPartial",
@@ -422,9 +433,6 @@ browser.runtime.onInstalled.addListener(() => {
     }
     const config = await loadConfig();
     await cleanupTranslationCache(config.cache.maxAgeDays);
-    await sidePanelApi()?.setPanelBehavior({
-      openPanelOnActionClick: false,
-    });
     await createContextMenus(
       browser.contextMenus as unknown as Parameters<
         typeof createContextMenus

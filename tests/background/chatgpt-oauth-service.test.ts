@@ -223,7 +223,7 @@ describe("ChatgptOauthService", () => {
     ]);
   });
 
-  it("uses separate configured efforts for translation and assistant requests", async () => {
+  it("uses the translation effort for batch and sidebar streams, separately from assistant requests", async () => {
     const accessToken = jwt({
       exp: Math.floor(Date.now() / 1_000) + 3_600,
     });
@@ -240,6 +240,11 @@ describe("ChatgptOauthService", () => {
       .mockResolvedValueOnce(
         sseResponse([
           'data: {"type":"response.output_text.delta","delta":"助手回复"}\n\n',
+        ]),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          'data: {"type":"response.output_text.delta","delta":"流式译文"}\n\n',
         ]),
       );
     vi.stubGlobal("fetch", fetchMock);
@@ -258,6 +263,20 @@ describe("ChatgptOauthService", () => {
       { kind: "chat", text: "Hello", service: "chatgpt" },
       signal,
     );
+    const onPartial = vi.fn();
+    await expect(
+      service.onPartial!(
+        {
+          kind: "translate",
+          text: "Hello",
+          service: "chatgpt",
+          from: "en",
+          to: "zh-CN",
+        },
+        onPartial,
+        signal,
+      ),
+    ).resolves.toBe("流式译文");
 
     const translationBody = JSON.parse(
       String(fetchMock.mock.calls[0]?.[1]?.body),
@@ -265,8 +284,13 @@ describe("ChatgptOauthService", () => {
     const assistantBody = JSON.parse(
       String(fetchMock.mock.calls[1]?.[1]?.body),
     ) as Record<string, unknown>;
+    const sidebarTranslationBody = JSON.parse(
+      String(fetchMock.mock.calls[2]?.[1]?.body),
+    ) as Record<string, unknown>;
     expect(translationBody.reasoning).toEqual({ effort: "xhigh" });
     expect(assistantBody.reasoning).toEqual({ effort: "high" });
+    expect(sidebarTranslationBody.reasoning).toEqual({ effort: "xhigh" });
+    expect(onPartial).toHaveBeenLastCalledWith("流式译文");
   });
 
   it("refreshes once after a 401 and retries with the new token", async () => {

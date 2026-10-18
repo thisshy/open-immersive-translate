@@ -352,6 +352,9 @@ export interface Config {
     service?: string;
     targetLanguage?: LangCode;
     historyLimit: number;
+    fontSize: number;
+    fontFamily: "system" | "yahei" | "song";
+    theme: "system" | "light" | "dark";
   };
   aiWriting: {
     enabled: boolean;

@@ -18,11 +18,12 @@ export interface AssistantRequest {
 }
 
 export interface AssistantClient {
-  complete(request: AssistantRequest): Promise<string>;
+  complete(request: AssistantRequest, signal?: AbortSignal): Promise<string>;
   supportsStreaming?(serviceId: string): Promise<boolean>;
   stream?(
     request: AssistantRequest,
     onPartial: (text: string) => void,
+    signal?: AbortSignal,
   ): Promise<string>;
 }
 
@@ -77,10 +78,86 @@ function randomId(): string {
     .slice(2, 8)}`;
 }
 
+function abortError(): DOMException {
+  return new DOMException("Assistant request cancelled.", "AbortError");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortError();
+}
+
+function requestOverPort(
+  request: AssistantRequest,
+  onPartial: ((text: string) => void) | undefined,
+  signal?: AbortSignal,
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    throwIfAborted(signal);
+    const requestId = randomId();
+    const port = runtimeApi().connect({ name: ASSISTANT_PORT_NAME });
+    let complete = false;
+    let latestText = "";
+
+    const finish = (error?: Error): void => {
+      if (complete) return;
+      complete = true;
+      signal?.removeEventListener("abort", onAbort);
+      port.onMessage.removeListener(onMessage);
+      // Disconnecting releases the background request's AbortController.
+      try {
+        port.disconnect();
+      } catch {
+        // A concurrently closed worker port is already disconnected.
+      }
+      if (error) reject(error);
+      else resolve(latestText);
+    };
+    const onAbort = (): void => finish(abortError());
+    const onMessage = (message: unknown): void => {
+      if (!isRecord(message) || message.type !== "assistantPartial") return;
+      const partial = message as unknown as AssistantPortResponse;
+      if (partial.requestId !== requestId) return;
+      if (partial.error) {
+        finish(new Error(partial.error));
+        return;
+      }
+      if (typeof partial.text === "string") {
+        latestText = partial.text;
+        onPartial?.(partial.text);
+      }
+      if (partial.done) finish();
+    };
+
+    port.onMessage.addListener(onMessage);
+    port.onDisconnect.addListener(() => {
+      // Chrome requires reading lastError even when we initiated disconnect.
+      const error = runtimeApi().lastError;
+      if (complete) return;
+      complete = true;
+      signal?.removeEventListener("abort", onAbort);
+      port.onMessage.removeListener(onMessage);
+      reject(new Error(error?.message ?? "Assistant stream disconnected."));
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    port.postMessage({
+      type: "assistantRequest",
+      requestId,
+      request,
+      stream: onPartial !== undefined,
+    });
+  });
+}
+
 /** Runtime-backed assistant client. Background wiring is documented for integration. */
 export function createAssistantClient(): AssistantClient {
   return {
-    async complete(request) {
+    async complete(request, signal) {
+      // A port gives non-streaming adapters the same cancellation lifecycle.
+      if (signal) return requestOverPort(request, undefined, signal);
       const response: unknown = await runtimeApi().sendMessage({
         type: "assistantRequest",
         request,
@@ -98,66 +175,37 @@ export function createAssistantClient(): AssistantClient {
         response.streaming
       );
     },
-    stream(request, onPartial) {
-      return new Promise<string>((resolve, reject) => {
-        const requestId = randomId();
-        const port = runtimeApi().connect({ name: ASSISTANT_PORT_NAME });
-        let complete = false;
-        let latestText = "";
-
-        const onMessage = (message: unknown): void => {
-          if (!isRecord(message) || message.type !== "assistantPartial") return;
-          const partial = message as unknown as AssistantPortResponse;
-          if (partial.requestId !== requestId) return;
-          if (partial.error) {
-            complete = true;
-            port.disconnect();
-            reject(new Error(partial.error));
-            return;
-          }
-          if (typeof partial.text === "string") {
-            latestText = partial.text;
-            onPartial(partial.text);
-          }
-          if (partial.done) {
-            complete = true;
-            port.disconnect();
-            resolve(latestText);
-          }
-        };
-
-        port.onMessage.addListener(onMessage);
-        port.onDisconnect.addListener(() => {
-          const error = runtimeApi().lastError;
-          port.onMessage.removeListener(onMessage);
-          if (!complete) {
-            reject(
-              new Error(error?.message ?? "Assistant stream disconnected."),
-            );
-          }
-        });
-        port.postMessage({ type: "assistantRequest", requestId, request });
-      });
-    },
+    stream: requestOverPort,
   };
 }
 
-/** Use streaming only when the selected adapter exposes it, then fall back safely. */
+/** Probe capabilities before dispatch; never silently resend a started request. */
 export async function runAssistant(
   client: AssistantClient,
   request: AssistantRequest,
   onPartial?: (text: string) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
+  throwIfAborted(signal);
   if (onPartial && client.stream && client.supportsStreaming) {
+    let streaming = false;
     try {
-      if (await client.supportsStreaming(request.service)) {
-        return await client.stream(request, onPartial);
+      streaming = await client.supportsStreaming(request.service);
+    } catch (error) {
+      if (
+        signal?.aborted ||
+        (error instanceof Error && error.name === "AbortError")
+      ) {
+        throw abortError();
       }
-    } catch {
-      // A worker restart or adapter failure should not lose the user's request.
+      // Capability discovery did not submit model work, so fallback is safe.
     }
+    throwIfAborted(signal);
+    if (streaming) return client.stream(request, onPartial, signal);
   }
-  const text = await client.complete(request);
+  throwIfAborted(signal);
+  const text = await client.complete(request, signal);
+  throwIfAborted(signal);
   onPartial?.(text);
   return text;
 }

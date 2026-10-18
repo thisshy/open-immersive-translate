@@ -345,8 +345,18 @@ export const configSchema: z.ZodType<Config> = z.object({
       service: z.string().default("chatgpt"),
       targetLanguage: langCodeSchema.optional(),
       historyLimit: z.number().int().positive().default(50),
+      fontSize: z.number().int().min(14).max(24).default(16),
+      fontFamily: z.enum(["system", "yahei", "song"]).default("system"),
+      theme: z.enum(["system", "light", "dark"]).default("system"),
     })
-    .default({ enabled: true, service: "chatgpt", historyLimit: 50 }),
+    .default({
+      enabled: true,
+      service: "chatgpt",
+      historyLimit: 50,
+      fontSize: 16,
+      fontFamily: "system",
+      theme: "system",
+    }),
   aiWriting: z
     .object({
       enabled: z.boolean().default(true),

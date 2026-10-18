@@ -4,7 +4,7 @@ export default defineManifest({
   manifest_version: 3,
   name: "Bilingual Translator",
   description: "Paragraph-level bilingual web translation.",
-  version: "0.0.4",
+  version: "0.0.5",
   permissions: [
     "storage",
     "alarms",
@@ -84,6 +84,6 @@ export default defineManifest({
   },
   options_page: "options.html",
   action: {
-    default_popup: "popup.html",
+    default_title: "打开翻译侧边栏",
   },
 });

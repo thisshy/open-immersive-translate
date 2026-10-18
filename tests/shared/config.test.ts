@@ -5,11 +5,63 @@ vi.mock("webextension-polyfill", () => ({ default: {} }));
 import {
   CONFIG_VERSION,
   DEFAULT_CONFIG,
+  configSchema,
   migrateConfig,
   serviceConfigSchema,
 } from "../../src/shared/config";
 
 describe("configuration migration", () => {
+  it("fills sidebar reading settings without changing an existing service", () => {
+    const migrated = migrateConfig({
+      ...DEFAULT_CONFIG,
+      service: "google",
+      sidePanel: {
+        enabled: true,
+        service: "google",
+        targetLanguage: "en",
+        historyLimit: 23,
+      },
+    });
+
+    expect(migrated.service).toBe("google");
+    expect(migrated.sidePanel).toEqual({
+      enabled: true,
+      service: "google",
+      targetLanguage: "en",
+      historyLimit: 23,
+      fontSize: 16,
+      fontFamily: "system",
+      theme: "system",
+    });
+    expect(DEFAULT_CONFIG.sidePanel).toMatchObject({
+      fontSize: 16,
+      fontFamily: "system",
+      theme: "system",
+    });
+  });
+
+  it("preserves sidebar appearance choices and validates the readable size range", () => {
+    for (const fontSize of [14, 24]) {
+      const sidePanel = {
+        ...DEFAULT_CONFIG.sidePanel,
+        fontSize,
+        fontFamily: "song" as const,
+        theme: "dark" as const,
+      };
+      expect(migrateConfig({ ...DEFAULT_CONFIG, sidePanel }).sidePanel).toEqual(
+        sidePanel,
+      );
+    }
+    for (const fontSize of [13, 25, 16.5]) {
+      expect(
+        configSchema.safeParse({
+          ...DEFAULT_CONFIG,
+          sidePanel: { ...DEFAULT_CONFIG.sidePanel, fontSize },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   it("defaults to ChatGPT OAuth and migrates existing service choices once", () => {
     expect(DEFAULT_CONFIG.service).toBe("chatgpt");
     expect(DEFAULT_CONFIG.sidePanel.service).toBe("chatgpt");
