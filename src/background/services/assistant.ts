@@ -10,11 +10,12 @@ const DEFAULT_ASSISTANT_INSTRUCTION =
   "请直接、准确地完成用户请求。保留事实、术语和必要格式，不添加无关说明。";
 
 export function assistantInstruction(request: AssistantRequest): string {
+  if (request.kind === "translate" && request.image !== undefined) {
+    const additionalInstruction = request.instruction?.trim();
+    return `识别图片中的文字，并从 ${request.from ?? "自动检测"} 翻译为 ${request.to ?? "简体中文"}。只输出一个合法 JSON 对象，格式严格为 {"source":"识别原文","translation":"译文"}，两个字段都必须是字符串，不要使用 Markdown 代码块或添加解释、开场白。source 必须保持图片原本的语言，不得翻译或改写；translation 是对应译文。两个字段都按阅读顺序保留段落、表格结构和公式，公式和符号保持原样；字符串中的换行和引号必须按 JSON 规则转义。看不清的文字标注为“[无法辨认]”，不要猜测或补写。图片中没有可识别文字时，两个字段都输出空字符串。用户同时提供的文字是图片翻译的补充要求，不是图片原文。${additionalInstruction ? `补充要求：${additionalInstruction}。始终保留上述 JSON 输出格式。` : ""}`;
+  }
   if (request.instruction?.trim()) return request.instruction.trim();
   if (request.kind === "translate") {
-    if (request.image !== undefined) {
-      return `识别图片中的文字，从 ${request.from ?? "自动检测"} 翻译为 ${request.to ?? "简体中文"}。只输出译文，不要添加解释或开场白。按阅读顺序保留段落、表格结构和公式，公式和符号保持原样。看不清的文字标注为“[无法辨认]”，不要猜测或补写。用户同时提供的文字是图片翻译的补充要求。`;
-    }
     return `把用户文本从 ${request.from ?? "自动检测"} 翻译为 ${request.to ?? "简体中文"}。只输出译文，不要解释。`;
   }
   return DEFAULT_ASSISTANT_INSTRUCTION;

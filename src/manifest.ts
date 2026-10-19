@@ -4,7 +4,7 @@ export default defineManifest({
   manifest_version: 3,
   name: "Bilingual Translator",
   description: "Paragraph-level bilingual web translation.",
-  version: "0.0.6",
+  version: "0.0.7",
   permissions: [
     "storage",
     "alarms",

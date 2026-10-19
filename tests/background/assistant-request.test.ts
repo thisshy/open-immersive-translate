@@ -105,11 +105,32 @@ describe("assistant request routing", () => {
     expect(service.completePrompt).not.toHaveBeenCalled();
   });
 
-  it("uses an image-specific instruction and respects an explicit instruction", () => {
-    expect(assistantInstruction(request)).toContain("只输出译文");
+  it("requires original text and translation in one image response, including with extra instructions", () => {
+    expect(assistantInstruction(request)).toContain(
+      '{"source":"识别原文","translation":"译文"}',
+    );
+    expect(assistantInstruction(request)).toContain(
+      "source 必须保持图片原本的语言",
+    );
     expect(assistantInstruction(request)).toContain("不要猜测或补写");
     expect(
       assistantInstruction({ ...request, instruction: " 保持表格 " }),
+    ).toContain("补充要求：保持表格");
+    expect(
+      assistantInstruction({ ...request, instruction: " 保持表格 " }),
+    ).toContain('{"source":"识别原文","translation":"译文"}');
+  });
+
+  it("keeps plain text and other tools' instruction behavior", () => {
+    expect(assistantInstruction({ ...request, image: undefined })).toBe(
+      "把用户文本从 自动检测 翻译为 简体中文。只输出译文，不要解释。",
+    );
+    expect(
+      assistantInstruction({
+        ...request,
+        image: undefined,
+        instruction: " 保持表格 ",
+      }),
     ).toBe("保持表格");
   });
 });

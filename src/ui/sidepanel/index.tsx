@@ -15,6 +15,7 @@ import {
   type AssistantRequest,
 } from "../../shared/k-assistant";
 import { LANGUAGE_CODES } from "../../shared/lang";
+import { parseImageTranslation } from "../../shared/image-translation";
 import type {
   Config,
   ConfigPatch,
@@ -80,6 +81,7 @@ export function SidePanel({
   const [page, setPage] = useState<PageState>();
   const [source, setSource] = useState("");
   const [attachment, setAttachment] = useState<ImageAttachment>();
+  const [imageOriginal, setImageOriginal] = useState("");
   const [imageLoading, setImageLoading] = useState(false);
   const [output, setOutput] = useState("");
   const [resultSource, setResultSource] = useState("");
@@ -144,6 +146,7 @@ export function SidePanel({
         setResultSource(draft.resultSource);
         setTool(draft.tool);
         setAttachment(draft.image);
+        setImageOriginal(draft.image ? (draft.imageOriginal ?? "") : "");
       }
       setDraftReady(true);
     });
@@ -160,6 +163,7 @@ export function SidePanel({
         setSource(message.text.trim());
         imageRevision.current += 1;
         setAttachment(undefined);
+        setImageOriginal("");
         setImageLoading(false);
         setOutput("");
         setResultSource("");
@@ -188,8 +192,23 @@ export function SidePanel({
   }, [history, historyReady, config?.sidePanel.historyLimit]);
   useEffect(() => {
     if (draftReady)
-      void saveDraft({ source, output, resultSource, tool, image: attachment });
-  }, [source, output, resultSource, tool, attachment, draftReady]);
+      void saveDraft({
+        source,
+        output,
+        resultSource,
+        tool,
+        image: attachment,
+        imageOriginal,
+      });
+  }, [
+    source,
+    output,
+    resultSource,
+    tool,
+    attachment,
+    imageOriginal,
+    draftReady,
+  ]);
   const configReady = Boolean(config);
   useEffect(() => {
     if (configReady && activeTab === "translate") sourceRef.current?.focus();
@@ -251,6 +270,7 @@ export function SidePanel({
     setNotice(undefined);
     setTool(nextTool);
     setOutput("");
+    if (attachment) setImageOriginal("");
     setResultSource(text);
     const instructions = {
       explain: `用${languageName(targetLanguage)}解释用户文本的含义和必要术语，忠于原文，不虚构背景，直接输出解释。`,
@@ -273,12 +293,25 @@ export function SidePanel({
         client,
         request,
         (partial) => {
-          if (!task.signal.aborted && mounted.current) setOutput(partial);
+          if (!task.signal.aborted && mounted.current) {
+            if (attachment) {
+              const parsed = parseImageTranslation(partial);
+              setImageOriginal(parsed.source);
+              setResultSource(parsed.source.trim());
+              setOutput(parsed.translation);
+            } else setOutput(partial);
+          }
         },
         task.signal,
       );
       if (task.signal.aborted || !mounted.current) return;
-      setOutput(result);
+      if (attachment) {
+        const parsed = parseImageTranslation(result, true);
+        if (!parsed.source.trim()) throw new Error(t("side.imageNoOriginal"));
+        setImageOriginal(parsed.source);
+        setResultSource(parsed.source.trim());
+        setOutput(parsed.translation);
+      } else setOutput(result);
       if (nextTool === "translate" && !attachment)
         setHistory((items) =>
           [
@@ -367,6 +400,7 @@ export function SidePanel({
       edited.current = true;
       imageRevision.current += 1;
       setAttachment(undefined);
+      setImageOriginal("");
       setImageLoading(false);
       setSource(response.text.trim());
       setActiveTab("translate");
@@ -442,6 +476,8 @@ export function SidePanel({
       const image = await read();
       if (mounted.current && imageRevision.current === revision) {
         setAttachment(image);
+        setSource("");
+        setImageOriginal("");
         setTool("translate");
         setOutput("");
         setResultSource("");
@@ -745,9 +781,10 @@ export function SidePanel({
               </label>
               <div class="side-card-actions">
                 <SpeechButton
-                  text={source}
+                  text={attachment ? imageOriginal : source}
                   language={config.sourceLanguage}
                   label={t("side.readSource")}
+                  disabled={!!attachment && working}
                 />
                 <Button
                   variant="quiet"
@@ -759,6 +796,7 @@ export function SidePanel({
                     edited.current = true;
                     imageRevision.current += 1;
                     setAttachment(undefined);
+                    setImageOriginal("");
                     setImageLoading(false);
                     setSource("");
                     setOutput("");
@@ -785,6 +823,8 @@ export function SidePanel({
                       imageRevision.current += 1;
                       setImageLoading(false);
                       setAttachment(undefined);
+                      setSource(imageOriginal);
+                      setImageOriginal("");
                       setOutput("");
                       setResultSource("");
                       setFailure(undefined);
@@ -800,12 +840,15 @@ export function SidePanel({
               ref={sourceRef}
               class="side-reading"
               aria-label={t("side.sourceText")}
-              placeholder={attachment ? t("side.imageNote") : t("side.noText")}
-              value={source}
+              placeholder={
+                attachment ? t("side.imageOriginalPending") : t("side.noText")
+              }
+              value={attachment ? imageOriginal : source}
               readOnly={working}
               onInput={(event) => {
                 edited.current = true;
-                setSource(event.currentTarget.value);
+                if (attachment) setImageOriginal(event.currentTarget.value);
+                else setSource(event.currentTarget.value);
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -814,6 +857,22 @@ export function SidePanel({
                 }
               }}
             />
+            {attachment && (
+              <details class="side-image-instructions">
+                <summary>{t("side.imageNoteLabel")}</summary>
+                <textarea
+                  class="side-reading"
+                  aria-label={t("side.imageNoteLabel")}
+                  placeholder={t("side.imageNote")}
+                  value={source}
+                  readOnly={working}
+                  onInput={(event) => {
+                    edited.current = true;
+                    setSource(event.currentTarget.value);
+                  }}
+                />
+              </details>
+            )}
             <div class="side-source-tools">
               <Button
                 variant="quiet"
@@ -968,9 +1027,11 @@ export function SidePanel({
                 {working ? t("side.working") : t("side.resultEmpty")}
               </p>
             )}
-            {output && resultSource !== source.trim() && (
-              <p class="side-stale">{t("side.originalChanged")}</p>
-            )}
+            {output &&
+              resultSource !==
+                (attachment ? imageOriginal.trim() : source.trim()) && (
+                <p class="side-stale">{t("side.originalChanged")}</p>
+              )}
           </section>
         </section>
       )}
@@ -1133,6 +1194,7 @@ export function SidePanel({
                         imageRevision.current += 1;
                         setImageLoading(false);
                         setAttachment(undefined);
+                        setImageOriginal("");
                         setSource(item.source);
                         setOutput(item.translation);
                         setResultSource(item.source);

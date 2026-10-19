@@ -281,6 +281,22 @@ body {
   height: 72px;
   min-height: 72px;
 }
+.side-has-image #side-source {
+  height: 120px;
+  min-height: 120px;
+}
+.side-image-instructions {
+  padding: 6px 10px;
+  border-top: 1px solid var(--ui-border);
+}
+.side-image-instructions summary {
+  color: var(--ui-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.side-image-instructions textarea {
+  margin-top: 8px;
+}
 .side-card-header .ui-button {
   min-height: 28px;
   padding: 4px 6px;

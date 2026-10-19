@@ -272,6 +272,10 @@ const zhCN = {
   "side.imageService":
     "图片翻译目前支持 ChatGPT 账号（OAuth），请在设置中切换翻译服务。",
   "side.imageDefaultPrompt": "请翻译图片中的文字。",
+  "side.imageOriginalPending":
+    "点击“翻译图片”后，这里会显示识别出的原文，并可朗读。",
+  "side.imageNoteLabel": "翻译要求（可选）",
+  "side.imageNoOriginal": "图片中没有识别出原文，请换一张清晰的图片后重试。",
   "selection.translate": "翻译选中文字",
   "selection.translating": "正在翻译…",
   "selection.failed": "翻译失败",
@@ -598,6 +602,11 @@ const en: Record<I18nKey, string> = {
   "side.imageService":
     "Image translation currently supports ChatGPT account (OAuth). Switch the translation service in settings.",
   "side.imageDefaultPrompt": "Translate the text in this image.",
+  "side.imageOriginalPending":
+    "Click Translate image to recognize the original text and read it aloud.",
+  "side.imageNoteLabel": "Translation instructions (optional)",
+  "side.imageNoOriginal":
+    "No original text was recognized. Try a clearer image.",
   "selection.translate": "Translate selection",
   "selection.translating": "Translating…",
   "selection.failed": "Translation failed",

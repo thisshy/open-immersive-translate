@@ -8,6 +8,7 @@ export interface SidePanelDraft {
   resultSource: string;
   tool: TextTool;
   image?: ImageAttachment;
+  imageOriginal?: string;
 }
 const DRAFT_KEY = "kSidePanelDraft";
 // Drafts last for this browser session; translation history is stored separately.
@@ -31,6 +32,11 @@ export async function loadDraft(): Promise<SidePanelDraft | undefined> {
       assertAssistantImage(draft.image);
       if (typeof draft.image.name !== "string") return;
     }
+    if (
+      draft.imageOriginal !== undefined &&
+      typeof draft.imageOriginal !== "string"
+    )
+      return;
     return draft as SidePanelDraft;
   } catch {
     return;
