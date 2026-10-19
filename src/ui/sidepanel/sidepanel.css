@@ -322,6 +322,59 @@ body {
   box-shadow: inset 0 0 0 2px var(--ui-accent);
   outline: 0;
 }
+.side-source-card textarea[hidden] {
+  display: none;
+}
+.side-source-preview {
+  min-height: 112px;
+  max-height: clamp(180px, 36vh, 360px);
+  padding: 12px;
+  overflow-y: auto;
+}
+.side-math-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+  user-select: text;
+}
+.side-math-text .katex {
+  font-size: 1.1em;
+  line-height: normal;
+  white-space: normal;
+  overflow-wrap: normal;
+}
+.side-math-text .katex-display {
+  margin: 0.8em 0;
+  padding: 4px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: left;
+}
+.side-math-text .katex-display > .katex {
+  display: inline-block;
+  width: max-content;
+  min-width: 100%;
+  white-space: nowrap;
+}
+.side-math-text .katex-display > .katex > .katex-html > .katex-tag {
+  position: static;
+  margin-left: 1em;
+}
+.side-math-text .katex-error {
+  color: var(--ui-muted) !important;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.side-math-text pre,
+.side-math-text code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.9em;
+}
+.side-math-text pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
 .side-source-card textarea::placeholder {
   color: var(--ui-muted);
   opacity: 0.8;

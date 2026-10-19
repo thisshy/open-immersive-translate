@@ -259,6 +259,96 @@ describe("SidePanel", () => {
     expect(assistant.stream).toHaveBeenCalledTimes(1);
   });
 
+  it("renders source and translation formulas while preserving editable and copied LaTeX", async () => {
+    const original = String.raw`Energy \(E=mc^2\).`;
+    const translation = String.raw`能量 \(E=mc^2\)。\n\[\frac{a}{b}=\sqrt{x}\]`;
+    const assistant = {
+      ...idleAssistant(),
+      complete: vi.fn().mockResolvedValue(translation),
+    };
+    const view = render(<SidePanel assistant={assistant} />);
+    const source =
+      await screen.findByLabelText<HTMLTextAreaElement>("输入要翻译的文字");
+    fireEvent.input(source, { target: { value: original } });
+    fireEvent.click(screen.getByRole("button", { name: "翻译文字" }));
+    await waitFor(() =>
+      expect(
+        view.container.querySelectorAll(".side-output .katex"),
+      ).toHaveLength(2),
+    );
+    expect(
+      view.container.querySelectorAll(".side-source-preview .katex"),
+    ).toHaveLength(1);
+    expect(source.hidden).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "复制译文" }));
+    await waitFor(() =>
+      expect(writeClipboard).toHaveBeenCalledWith(translation),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "编辑原文" }));
+    await waitFor(() => expect(source.hidden).toBe(false));
+    expect(document.activeElement).toBe(source);
+    expect(source.value).toBe(original);
+    fireEvent.input(source, { target: { value: String.raw`New \(x^2\).` } });
+    fireEvent.click(screen.getByRole("button", { name: "公式预览" }));
+    await waitFor(() => expect(source.hidden).toBe(true));
+    expect(
+      view.container.querySelector(".side-source-preview annotation")
+        ?.textContent,
+    ).toBe("x^2");
+    expect(assistant.complete).toHaveBeenCalledTimes(1);
+    expect(assistant.stream).not.toHaveBeenCalled();
+    fireEvent.keyDown(view.container.querySelector(".side-source-preview")!, {
+      key: "Enter",
+      ctrlKey: true,
+    });
+    await waitFor(() => expect(assistant.complete).toHaveBeenCalledTimes(2));
+  });
+
+  it("renders recognized image formulas and restores formula previews from the session draft", async () => {
+    const original = String.raw`Growth \(\tilde{\ell}\gg1\).`;
+    const translation = String.raw`增长 \(\tilde{\ell}\gg1\)。`;
+    const assistant = {
+      ...idleAssistant(),
+      complete: vi
+        .fn()
+        .mockResolvedValue(JSON.stringify({ source: original, translation })),
+    };
+    const view = render(<SidePanel assistant={assistant} />);
+    pasteImage(await screen.findByLabelText("输入要翻译的文字"));
+    fireEvent.click(await screen.findByRole("button", { name: "翻译图片" }));
+    await waitFor(() =>
+      expect(
+        view.container.querySelectorAll(".side-source-preview .katex"),
+      ).toHaveLength(1),
+    );
+    expect(view.container.querySelectorAll(".side-output .katex")).toHaveLength(
+      1,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "朗读原文" }));
+    expect(speak).toHaveBeenCalledWith(
+      expect.objectContaining({ text: original }),
+    );
+    await waitFor(() =>
+      expect(session.kSidePanelDraft).toEqual(
+        expect.objectContaining({
+          imageOriginal: original,
+          output: translation,
+        }),
+      ),
+    );
+    view.unmount();
+    const reopened = render(<SidePanel assistant={assistant} />);
+    await waitFor(() =>
+      expect(
+        reopened.container.querySelectorAll(".side-source-preview .katex"),
+      ).toHaveLength(1),
+    );
+    expect(
+      reopened.container.querySelectorAll(".side-output .katex"),
+    ).toHaveLength(1);
+    expect(assistant.complete).toHaveBeenCalledTimes(1);
+  });
+
   it("loads older settings with a readable font and persists the chosen size", async () => {
     const oldConfig = structuredClone(DEFAULT_CONFIG);
     storage.config = {

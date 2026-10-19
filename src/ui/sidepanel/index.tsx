@@ -41,6 +41,7 @@ import {
   type ImageAttachment,
 } from "./images";
 import { SpeechButton } from "./speech";
+import { hasMath, MathText } from "./math-text";
 import { loadDraft, saveDraft, type TextTool } from "./state";
 import "../shared/styles.css";
 import "./sidepanel.css";
@@ -80,6 +81,7 @@ export function SidePanel({
   );
   const [page, setPage] = useState<PageState>();
   const [source, setSource] = useState("");
+  const [sourceEditing, setSourceEditing] = useState(false);
   const [attachment, setAttachment] = useState<ImageAttachment>();
   const [imageOriginal, setImageOriginal] = useState("");
   const [imageLoading, setImageLoading] = useState(false);
@@ -161,6 +163,7 @@ export function SidePanel({
         controller.current = undefined;
         setWorking(false);
         setSource(message.text.trim());
+        setSourceEditing(false);
         imageRevision.current += 1;
         setAttachment(undefined);
         setImageOriginal("");
@@ -213,6 +216,9 @@ export function SidePanel({
   useEffect(() => {
     if (configReady && activeTab === "translate") sourceRef.current?.focus();
   }, [configReady, activeTab]);
+  useEffect(() => {
+    if (sourceEditing) sourceRef.current?.focus();
+  }, [sourceEditing]);
 
   if (!config)
     return (
@@ -227,6 +233,9 @@ export function SidePanel({
       : (config.sidePanel.service ?? config.service);
   const targetLanguage =
     config.sidePanel.targetLanguage ?? config.targetLanguage;
+  const sourceText = attachment ? imageOriginal : source;
+  const sourceHasMath = hasMath(sourceText);
+  const sourcePreview = sourceHasMath && !sourceEditing;
   const serviceConfig = config.services[service];
   const model =
     serviceConfig?.model ??
@@ -266,6 +275,7 @@ export function SidePanel({
     const task = new AbortController();
     controller.current = task;
     setWorking(true);
+    setSourceEditing(false);
     setFailure(undefined);
     setNotice(undefined);
     setTool(nextTool);
@@ -403,6 +413,7 @@ export function SidePanel({
       setImageOriginal("");
       setImageLoading(false);
       setSource(response.text.trim());
+      setSourceEditing(false);
       setActiveTab("translate");
       setFailure(undefined);
       setNotice(undefined);
@@ -477,6 +488,7 @@ export function SidePanel({
       if (mounted.current && imageRevision.current === revision) {
         setAttachment(image);
         setSource("");
+        setSourceEditing(false);
         setImageOriginal("");
         setTool("translate");
         setOutput("");
@@ -500,6 +512,17 @@ export function SidePanel({
       style={{
         "--side-font-size": `${config.sidePanel.fontSize}px`,
         "--side-font-family": FONTS[config.sidePanel.fontFamily],
+      }}
+      onKeyDown={(event) => {
+        if (
+          activeTab === "translate" &&
+          !event.defaultPrevented &&
+          event.key === "Enter" &&
+          (event.ctrlKey || event.metaKey)
+        ) {
+          event.preventDefault();
+          void execute();
+        }
       }}
       onPaste={(event) => {
         if (activeTab !== "translate") return;
@@ -780,6 +803,18 @@ export function SidePanel({
                 {t("side.sourceLabel")}
               </label>
               <div class="side-card-actions">
+                {sourceHasMath && (
+                  <Button
+                    variant="quiet"
+                    disabled={working}
+                    aria-controls="side-source side-source-preview"
+                    onClick={() => setSourceEditing(!sourceEditing)}
+                  >
+                    {sourcePreview
+                      ? t("side.editSource")
+                      : t("side.mathPreview")}
+                  </Button>
+                )}
                 <SpeechButton
                   text={attachment ? imageOriginal : source}
                   language={config.sourceLanguage}
@@ -799,6 +834,7 @@ export function SidePanel({
                     setImageOriginal("");
                     setImageLoading(false);
                     setSource("");
+                    setSourceEditing(false);
                     setOutput("");
                     setResultSource("");
                     setFailure(undefined);
@@ -824,6 +860,7 @@ export function SidePanel({
                       setImageLoading(false);
                       setAttachment(undefined);
                       setSource(imageOriginal);
+                      setSourceEditing(false);
                       setImageOriginal("");
                       setOutput("");
                       setResultSource("");
@@ -835,10 +872,20 @@ export function SidePanel({
                 </figcaption>
               </figure>
             )}
+            {sourcePreview && (
+              <MathText
+                id="side-source-preview"
+                class="side-source-preview side-reading"
+                text={sourceText}
+                label={t("side.mathPreview")}
+                tabIndex={0}
+              />
+            )}
             <textarea
               id="side-source"
               ref={sourceRef}
               class="side-reading"
+              hidden={sourcePreview}
               aria-label={t("side.sourceText")}
               placeholder={
                 attachment ? t("side.imageOriginalPending") : t("side.noText")
@@ -847,6 +894,7 @@ export function SidePanel({
               readOnly={working}
               onInput={(event) => {
                 edited.current = true;
+                setSourceEditing(true);
                 if (attachment) setImageOriginal(event.currentTarget.value);
                 else setSource(event.currentTarget.value);
               }}
@@ -892,6 +940,7 @@ export function SidePanel({
                     .then((text) => {
                       edited.current = true;
                       setSource(text);
+                      setSourceEditing(false);
                       sourceRef.current?.focus();
                     })
                     .catch(() => setFailure(t("side.pasteFailed")));
@@ -1019,9 +1068,11 @@ export function SidePanel({
               </div>
             </header>
             {output ? (
-              <div class="side-output side-reading" aria-live="polite">
-                {output}
-              </div>
+              <MathText
+                class="side-output side-reading"
+                text={output}
+                live="polite"
+              />
             ) : (
               <p class="side-output side-empty">
                 {working ? t("side.working") : t("side.resultEmpty")}
@@ -1196,6 +1247,7 @@ export function SidePanel({
                         setAttachment(undefined);
                         setImageOriginal("");
                         setSource(item.source);
+                        setSourceEditing(false);
                         setOutput(item.translation);
                         setResultSource(item.source);
                         setTool("translate");
