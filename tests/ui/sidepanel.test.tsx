@@ -70,6 +70,7 @@ const IMAGE_RESPONSE = JSON.stringify({
 
 class MockUtterance {
   lang = "";
+  rate = 1;
   voice: SpeechSynthesisVoice | null = null;
   onend: (() => void) | null = null;
   onerror: ((event: { error: string }) => void) | null = null;
@@ -377,6 +378,61 @@ describe("SidePanel", () => {
         .querySelector<HTMLElement>(".side-shell")!
         .style.getPropertyValue("--side-font-size"),
     ).toBe("17px");
+  });
+
+  it("saves source and translation speeds separately and restores playback at those speeds", async () => {
+    session.kSidePanelDraft = {
+      source: "Hello",
+      output: "你好",
+      resultSource: "Hello",
+      tool: "translate",
+    };
+    const assistant = idleAssistant();
+    const view = render(<SidePanel assistant={assistant} />);
+    const sourceRate = await screen.findByRole<HTMLSelectElement>("combobox", {
+      name: "原文语速",
+    });
+    const translationRate = screen.getByRole<HTMLSelectElement>("combobox", {
+      name: "译文语速",
+    });
+    expect(sourceRate.value).toBe("0.8");
+    expect(translationRate.value).toBe("1");
+    fireEvent.change(sourceRate, { target: { value: "0.6" } });
+    await waitFor(() =>
+      expect(storage.config).toMatchObject({
+        sidePanel: { sourceSpeechRate: 0.6, translationSpeechRate: 1 },
+      }),
+    );
+    fireEvent.change(translationRate, { target: { value: "1.25" } });
+    await waitFor(() =>
+      expect(storage.config).toMatchObject({
+        sidePanel: { sourceSpeechRate: 0.6, translationSpeechRate: 1.25 },
+      }),
+    );
+    view.unmount();
+    render(<SidePanel assistant={assistant} />);
+    expect(
+      (
+        await screen.findByRole<HTMLSelectElement>("combobox", {
+          name: "原文语速",
+        })
+      ).value,
+    ).toBe("0.6");
+    expect(
+      screen.getByRole<HTMLSelectElement>("combobox", { name: "译文语速" })
+        .value,
+    ).toBe("1.25");
+    await screen.findByDisplayValue("Hello");
+    fireEvent.click(screen.getByRole("button", { name: "朗读原文" }));
+    expect(speak).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "Hello", lang: "en-US", rate: 0.6 }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "朗读译文" }));
+    expect(speak).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "你好", lang: "zh-CN", rate: 1.25 }),
+    );
+    expect(assistant.complete).not.toHaveBeenCalled();
+    expect(assistant.stream).not.toHaveBeenCalled();
   });
 
   it("previews a pasted image and only submits its image-only translation when requested", async () => {

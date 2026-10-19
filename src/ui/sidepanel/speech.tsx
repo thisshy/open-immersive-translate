@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { detectLang, normalizeLang } from "../../shared/lang";
 import { Button } from "../shared/components";
+import { t } from "../shared/i18n";
 
 interface SpeechButtonProps {
   text: string;
   language: string;
   label: string;
   disabled?: boolean;
+  rate?: number;
+  rateLabel?: string;
+  onRateChange?: (rate: number) => void;
 }
+
+const SPEECH_RATES = [0.5, 0.6, 0.75, 0.8, 0.9, 1, 1.25, 1.5, 2];
 
 interface ActiveSpeech {
   owner: symbol;
@@ -101,6 +107,9 @@ export function SpeechButton({
   language,
   label,
   disabled = false,
+  rate = 1,
+  rateLabel,
+  onRateChange,
 }: SpeechButtonProps) {
   const owner = useRef(Symbol("side-panel-speech")).current;
   const [active, setActive] = useState(false);
@@ -140,11 +149,7 @@ export function SpeechButton({
     return () => stopSpeech(owner);
   }, [owner, text, language]);
 
-  function toggleSpeech(): void {
-    if (activeSpeech?.owner === owner) {
-      stopSpeech(owner);
-      return;
-    }
+  function startSpeech(nextRate: number): void {
     if (!engine || !voice || !text.trim() || disabled) return;
 
     stopSpeech();
@@ -152,6 +157,7 @@ export function SpeechButton({
     const utterance = new SpeechSynthesisUtterance(text.trim());
     utterance.lang = speechLanguage;
     utterance.voice = voice;
+    utterance.rate = nextRate;
     const speech = { owner, utterance, engine };
     activeSpeech = speech;
     utterance.onend = () => {
@@ -179,19 +185,49 @@ export function SpeechButton({
     }
   }
 
+  function toggleSpeech(): void {
+    if (activeSpeech?.owner === owner) stopSpeech(owner);
+    else startSpeech(rate);
+  }
+
   return (
     <span class="side-speech-control">
-      <Button
-        variant="quiet"
-        class="side-speech-button"
-        aria-label={active ? `停止${label}` : label}
-        aria-pressed={active}
-        disabled={!active && (disabled || !text.trim() || !!unavailable)}
-        title={unavailable ?? label}
-        onClick={toggleSpeech}
-      >
-        {active ? "停止朗读" : "朗读"}
-      </Button>
+      <span class="side-speech-actions">
+        <Button
+          variant="quiet"
+          class="side-speech-button"
+          aria-label={active ? `停止${label}` : label}
+          aria-pressed={active}
+          disabled={!active && (disabled || !text.trim() || !!unavailable)}
+          title={unavailable ?? label}
+          onClick={toggleSpeech}
+        >
+          {active ? "停止朗读" : "朗读"}
+        </Button>
+        {onRateChange && (
+          <select
+            class="side-speech-rate"
+            aria-label={rateLabel ?? `${label} ${t("side.speechRate")}`}
+            title={t("side.speechRateHint")}
+            value={String(rate)}
+            disabled={disabled}
+            onChange={(event) => {
+              const nextRate = Number(event.currentTarget.value);
+              onRateChange(nextRate);
+              // Re-create the utterance: voices need not apply rate changes mid-playback.
+              if (activeSpeech?.owner === owner) startSpeech(nextRate);
+            }}
+          >
+            {[...new Set([...SPEECH_RATES, rate])]
+              .sort((a, b) => a - b)
+              .map((value) => (
+                <option key={value} value={value}>
+                  {value}×
+                </option>
+              ))}
+          </select>
+        )}
+      </span>
       {error && (
         <small role="alert" class="side-speech-error">
           {error}

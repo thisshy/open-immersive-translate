@@ -215,6 +215,23 @@ body {
   color: var(--side-result-label);
   background: var(--ui-accent-soft);
 }
+.side-speech-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.side-speech-rate {
+  width: 68px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 2px;
+  border: 1px solid var(--ui-border);
+  border-radius: 5px;
+  background: var(--ui-panel);
+  color: var(--ui-text);
+  font-size: 12px;
+  cursor: pointer;
+}
 .side-speech-error {
   max-width: 180px;
   padding: 2px 4px;

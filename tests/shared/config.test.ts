@@ -32,12 +32,49 @@ describe("configuration migration", () => {
       fontSize: 16,
       fontFamily: "system",
       theme: "system",
+      sourceSpeechRate: 0.8,
+      translationSpeechRate: 1,
     });
     expect(DEFAULT_CONFIG.sidePanel).toMatchObject({
       fontSize: 16,
       fontFamily: "system",
       theme: "system",
+      sourceSpeechRate: 0.8,
+      translationSpeechRate: 1,
     });
+  });
+
+  it("preserves independent speech speeds and rejects out-of-range settings", () => {
+    const sidePanel = {
+      ...DEFAULT_CONFIG.sidePanel,
+      sourceSpeechRate: 0.6,
+      translationSpeechRate: 1.25,
+    };
+    expect(migrateConfig({ ...DEFAULT_CONFIG, sidePanel }).sidePanel).toEqual(
+      sidePanel,
+    );
+    for (const rate of [0.5, 2]) {
+      expect(
+        configSchema.safeParse({
+          ...DEFAULT_CONFIG,
+          sidePanel: {
+            ...sidePanel,
+            sourceSpeechRate: rate,
+            translationSpeechRate: rate,
+          },
+        }).success,
+      ).toBe(true);
+    }
+    for (const rate of [0.4, 2.1, Infinity, NaN]) {
+      for (const key of ["sourceSpeechRate", "translationSpeechRate"]) {
+        expect(
+          configSchema.safeParse({
+            ...DEFAULT_CONFIG,
+            sidePanel: { ...sidePanel, [key]: rate },
+          }).success,
+        ).toBe(false);
+      }
+    }
   });
 
   it("preserves sidebar appearance choices and validates the readable size range", () => {

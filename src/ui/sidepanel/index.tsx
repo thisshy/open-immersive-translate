@@ -819,6 +819,9 @@ export function SidePanel({
                   text={attachment ? imageOriginal : source}
                   language={config.sourceLanguage}
                   label={t("side.readSource")}
+                  rate={config.sidePanel.sourceSpeechRate}
+                  rateLabel={t("side.sourceSpeechRate")}
+                  onRateChange={(rate) => savePanel({ sourceSpeechRate: rate })}
                   disabled={!!attachment && working}
                 />
                 <Button
@@ -1051,6 +1054,11 @@ export function SidePanel({
                     tool === "polish" ? config.sourceLanguage : targetLanguage
                   }
                   label={t("side.readResult")}
+                  rate={config.sidePanel.translationSpeechRate}
+                  rateLabel={t("side.translationSpeechRate")}
+                  onRateChange={(rate) =>
+                    savePanel({ translationSpeechRate: rate })
+                  }
                   disabled={working}
                 />
                 <Button

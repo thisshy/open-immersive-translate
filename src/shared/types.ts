@@ -355,6 +355,8 @@ export interface Config {
     fontSize: number;
     fontFamily: "system" | "yahei" | "song";
     theme: "system" | "light" | "dark";
+    sourceSpeechRate: number;
+    translationSpeechRate: number;
   };
   aiWriting: {
     enabled: boolean;
