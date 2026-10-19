@@ -1,4 +1,5 @@
 import type { LangCode } from "./types";
+import { assertAssistantImage, type AssistantImage } from "./assistant-image";
 
 export const ASSISTANT_PORT_NAME = "imt:assistant";
 
@@ -15,6 +16,7 @@ export interface AssistantRequest {
   to?: LangCode;
   instruction?: string;
   history?: AssistantChatMessage[];
+  image?: AssistantImage;
 }
 
 export interface AssistantClient {
@@ -187,6 +189,7 @@ export async function runAssistant(
   signal?: AbortSignal,
 ): Promise<string> {
   throwIfAborted(signal);
+  if (request.image !== undefined) assertAssistantImage(request.image);
   if (onPartial && client.stream && client.supportsStreaming) {
     let streaming = false;
     try {

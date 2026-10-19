@@ -5,6 +5,7 @@ import {
   DEFAULT_CHATGPT_MODEL,
 } from "../../../shared/chatgpt-models";
 import type { AssistantRequest } from "../../../shared/k-assistant";
+import { assertAssistantImage } from "../../../shared/assistant-image";
 import type {
   RateLimit,
   ReasoningEffort,
@@ -344,15 +345,29 @@ export class ChatgptOauthService extends BaseService {
     signal: AbortSignal,
     options?: TranslationStreamOptions,
   ): Promise<string> {
+    if (request.image !== undefined) assertAssistantImage(request.image);
     const model = await this.selectedModel();
-    const input = assistantConversation(request).map((message) => ({
+    const conversation = assistantConversation(request);
+    type InputContent =
+      | { type: "input_text" | "output_text"; text: string }
+      | { type: "input_image"; image_url: string; detail: "auto" };
+    const input = conversation.map((message, index) => ({
       role: message.role,
       content: [
         {
           type: message.role === "assistant" ? "output_text" : "input_text",
           text: message.content,
         },
-      ],
+        ...(request.image && index === conversation.length - 1
+          ? [
+              {
+                type: "input_image",
+                image_url: request.image.dataUrl,
+                detail: "auto",
+              },
+            ]
+          : []),
+      ] as InputContent[],
     }));
     return this.streamResponse(
       {

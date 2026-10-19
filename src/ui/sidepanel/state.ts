@@ -1,10 +1,13 @@
 import browser from "webextension-polyfill";
+import { assertAssistantImage } from "../../shared/assistant-image";
+import type { ImageAttachment } from "./images";
 export type TextTool = "translate" | "explain" | "polish" | "summarize";
 export interface SidePanelDraft {
   source: string;
   output: string;
   resultSource: string;
   tool: TextTool;
+  image?: ImageAttachment;
 }
 const DRAFT_KEY = "kSidePanelDraft";
 // Drafts last for this browser session; translation history is stored separately.
@@ -24,6 +27,10 @@ export async function loadDraft(): Promise<SidePanelDraft | undefined> {
       )
     )
       return;
+    if (draft.image !== undefined) {
+      assertAssistantImage(draft.image);
+      if (typeof draft.image.name !== "string") return;
+    }
     return draft as SidePanelDraft;
   } catch {
     return;

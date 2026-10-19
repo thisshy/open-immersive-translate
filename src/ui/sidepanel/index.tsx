@@ -32,6 +32,14 @@ import {
 } from "../shared/i18n";
 import { useKConfig } from "../shared/k-config";
 import { clearCache, getCacheCount } from "../shared/runtime";
+import {
+  captureTabImage,
+  pastedImage,
+  readClipboardImage,
+  readImageFile,
+  type ImageAttachment,
+} from "./images";
+import { SpeechButton } from "./speech";
 import { loadDraft, saveDraft, type TextTool } from "./state";
 import "../shared/styles.css";
 import "./sidepanel.css";
@@ -71,6 +79,8 @@ export function SidePanel({
   );
   const [page, setPage] = useState<PageState>();
   const [source, setSource] = useState("");
+  const [attachment, setAttachment] = useState<ImageAttachment>();
+  const [imageLoading, setImageLoading] = useState(false);
   const [output, setOutput] = useState("");
   const [resultSource, setResultSource] = useState("");
   const [tool, setTool] = useState<TextTool>("translate");
@@ -90,6 +100,8 @@ export function SidePanel({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const imageRevision = useRef(0);
   const controller = useRef<AbortController>();
   const edited = useRef(false);
   const mounted = useRef(true);
@@ -131,6 +143,7 @@ export function SidePanel({
         setOutput(draft.output);
         setResultSource(draft.resultSource);
         setTool(draft.tool);
+        setAttachment(draft.image);
       }
       setDraftReady(true);
     });
@@ -145,6 +158,9 @@ export function SidePanel({
         controller.current = undefined;
         setWorking(false);
         setSource(message.text.trim());
+        imageRevision.current += 1;
+        setAttachment(undefined);
+        setImageLoading(false);
         setOutput("");
         setResultSource("");
         setFailure(undefined);
@@ -171,8 +187,9 @@ export function SidePanel({
       );
   }, [history, historyReady, config?.sidePanel.historyLimit]);
   useEffect(() => {
-    if (draftReady) void saveDraft({ source, output, resultSource, tool });
-  }, [source, output, resultSource, tool, draftReady]);
+    if (draftReady)
+      void saveDraft({ source, output, resultSource, tool, image: attachment });
+  }, [source, output, resultSource, tool, attachment, draftReady]);
   const configReady = Boolean(config);
   useEffect(() => {
     if (configReady && activeTab === "translate") sourceRef.current?.focus();
@@ -222,7 +239,11 @@ export function SidePanel({
     rawText = source,
   ): Promise<void> => {
     const text = rawText.trim();
-    if (!text || controller.current) return;
+    if ((!text && !attachment) || controller.current || imageLoading) return;
+    if (attachment && service !== "chatgpt") {
+      setFailure(t("side.imageService"));
+      return;
+    }
     const task = new AbortController();
     controller.current = task;
     setWorking(true);
@@ -239,7 +260,8 @@ export function SidePanel({
     };
     const request: AssistantRequest = {
       kind: nextTool === "translate" ? "translate" : "writing",
-      text,
+      text: text || t("side.imageDefaultPrompt"),
+      ...(attachment ? { image: { dataUrl: attachment.dataUrl } } : {}),
       service,
       from: config.sourceLanguage,
       to: targetLanguage,
@@ -257,7 +279,7 @@ export function SidePanel({
       );
       if (task.signal.aborted || !mounted.current) return;
       setOutput(result);
-      if (nextTool === "translate")
+      if (nextTool === "translate" && !attachment)
         setHistory((items) =>
           [
             {
@@ -343,6 +365,9 @@ export function SidePanel({
       )
         throw new Error(t("side.noSelection"));
       edited.current = true;
+      imageRevision.current += 1;
+      setAttachment(undefined);
+      setImageLoading(false);
       setSource(response.text.trim());
       setActiveTab("translate");
       setFailure(undefined);
@@ -404,6 +429,33 @@ export function SidePanel({
     }
   };
   const failureText = failure ?? error?.message;
+  const loadImage = async (
+    read: () => Promise<ImageAttachment>,
+  ): Promise<void> => {
+    if (controller.current) return;
+    const revision = ++imageRevision.current;
+    edited.current = true;
+    setImageLoading(true);
+    setFailure(undefined);
+    setNotice(undefined);
+    try {
+      const image = await read();
+      if (mounted.current && imageRevision.current === revision) {
+        setAttachment(image);
+        setTool("translate");
+        setOutput("");
+        setResultSource("");
+        setActiveTab("translate");
+        sourceRef.current?.focus();
+      }
+    } catch (cause) {
+      if (mounted.current && imageRevision.current === revision)
+        setFailure(errorText(cause));
+    } finally {
+      if (mounted.current && imageRevision.current === revision)
+        setImageLoading(false);
+    }
+  };
 
   return (
     <main
@@ -412,6 +464,13 @@ export function SidePanel({
       style={{
         "--side-font-size": `${config.sidePanel.fontSize}px`,
         "--side-font-family": FONTS[config.sidePanel.fontFamily],
+      }}
+      onPaste={(event) => {
+        if (activeTab !== "translate") return;
+        const file = pastedImage(event.clipboardData?.items ?? []);
+        if (!file) return;
+        event.preventDefault();
+        void loadImage(() => readImageFile(file));
       }}
     >
       <header class="side-header">
@@ -677,7 +736,7 @@ export function SidePanel({
             />
           </div>
           <section
-            class="side-text-card side-source-card"
+            class={`side-text-card side-source-card${attachment ? " side-has-image" : ""}`}
             aria-labelledby="side-source-label"
           >
             <header class="side-card-header">
@@ -685,35 +744,22 @@ export function SidePanel({
                 {t("side.sourceLabel")}
               </label>
               <div class="side-card-actions">
+                <SpeechButton
+                  text={source}
+                  language={config.sourceLanguage}
+                  label={t("side.readSource")}
+                />
                 <Button
                   variant="quiet"
-                  disabled={working}
-                  onClick={() => void readSelection()}
-                  title={t("side.selection")}
-                >
-                  {t("side.selection")}
-                </Button>
-                <Button
-                  variant="quiet"
-                  disabled={working}
-                  onClick={() => {
-                    void navigator.clipboard
-                      .readText()
-                      .then((text) => {
-                        edited.current = true;
-                        setSource(text);
-                        sourceRef.current?.focus();
-                      })
-                      .catch(() => setFailure(t("side.pasteFailed")));
-                  }}
-                >
-                  {t("side.paste")}
-                </Button>
-                <Button
-                  variant="quiet"
-                  disabled={working || (!source && !output)}
+                  disabled={
+                    working ||
+                    (!source && !output && !attachment && !imageLoading)
+                  }
                   onClick={() => {
                     edited.current = true;
+                    imageRevision.current += 1;
+                    setAttachment(undefined);
+                    setImageLoading(false);
                     setSource("");
                     setOutput("");
                     setResultSource("");
@@ -726,12 +772,35 @@ export function SidePanel({
                 </Button>
               </div>
             </header>
+            {attachment && (
+              <figure class="side-image-preview">
+                <img src={attachment.dataUrl} alt={t("side.imageAlt")} />
+                <figcaption>
+                  <span title={attachment.name}>{attachment.name}</span>
+                  <Button
+                    variant="quiet"
+                    disabled={working}
+                    onClick={() => {
+                      edited.current = true;
+                      imageRevision.current += 1;
+                      setImageLoading(false);
+                      setAttachment(undefined);
+                      setOutput("");
+                      setResultSource("");
+                      setFailure(undefined);
+                    }}
+                  >
+                    {t("side.imageRemove")}
+                  </Button>
+                </figcaption>
+              </figure>
+            )}
             <textarea
               id="side-source"
               ref={sourceRef}
               class="side-reading"
               aria-label={t("side.sourceText")}
-              placeholder={t("side.noText")}
+              placeholder={attachment ? t("side.imageNote") : t("side.noText")}
               value={source}
               readOnly={working}
               onInput={(event) => {
@@ -745,15 +814,87 @@ export function SidePanel({
                 }
               }}
             />
+            <div class="side-source-tools">
+              <Button
+                variant="quiet"
+                disabled={working || imageLoading}
+                aria-label={t("side.selection")}
+                title={t("side.selection")}
+                onClick={() => void readSelection()}
+              >
+                {t("side.selectionShort")}
+              </Button>
+              <Button
+                variant="quiet"
+                disabled={working || imageLoading}
+                onClick={() => {
+                  void navigator.clipboard
+                    .readText()
+                    .then((text) => {
+                      edited.current = true;
+                      setSource(text);
+                      sourceRef.current?.focus();
+                    })
+                    .catch(() => setFailure(t("side.pasteFailed")));
+                }}
+              >
+                {t("side.paste")}
+              </Button>
+              <Button
+                variant="quiet"
+                disabled={working || imageLoading}
+                onClick={() => void loadImage(readClipboardImage)}
+              >
+                {t("side.imagePaste")}
+              </Button>
+              <Button
+                variant="quiet"
+                disabled={working || imageLoading}
+                onClick={() => void loadImage(captureTabImage)}
+              >
+                {t("side.imageCapture")}
+              </Button>
+              <Button
+                variant="quiet"
+                disabled={working || imageLoading}
+                onClick={() => fileRef.current?.click()}
+              >
+                {t("side.imageChoose")}
+              </Button>
+              <input
+                ref={fileRef}
+                class="side-file-input"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                aria-label={t("side.imageChoose")}
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  if (file) void loadImage(() => readImageFile(file));
+                }}
+              />
+            </div>
+            <p
+              class="side-image-hint"
+              role={imageLoading ? "status" : undefined}
+            >
+              {imageLoading ? t("side.imageLoading") : t("side.imageHint")}
+            </p>
           </section>
           <div class="side-run-row">
             <Button
               class="side-translate-button"
               variant="primary"
-              disabled={working || !source.trim()}
+              disabled={
+                working || imageLoading || (!source.trim() && !attachment)
+              }
               onClick={() => void execute()}
             >
-              {working ? t("side.working") : t("side.translateAction")}
+              {working
+                ? t("side.working")
+                : attachment
+                  ? t("side.imageAction")
+                  : t("side.translateAction")}
             </Button>
             {working ? (
               <Button
@@ -775,7 +916,9 @@ export function SidePanel({
               <Button
                 key={kind}
                 variant="quiet"
-                disabled={working || !source.trim()}
+                disabled={
+                  working || imageLoading || !!attachment || !source.trim()
+                }
                 onClick={() => void execute(kind)}
               >
                 {t(`side.${kind}`)}
@@ -793,18 +936,28 @@ export function SidePanel({
                   ? t("side.resultLabel")
                   : t(`side.${tool}`)}
               </h2>
-              <Button
-                variant="quiet"
-                disabled={!output}
-                onClick={() => {
-                  void navigator.clipboard
-                    .writeText(output)
-                    .then(() => setNotice(t("side.copied")))
-                    .catch(() => setFailure(t("side.copyFailed")));
-                }}
-              >
-                {t("side.copyResult")}
-              </Button>
+              <div class="side-card-actions">
+                <SpeechButton
+                  text={output}
+                  language={
+                    tool === "polish" ? config.sourceLanguage : targetLanguage
+                  }
+                  label={t("side.readResult")}
+                  disabled={working}
+                />
+                <Button
+                  variant="quiet"
+                  disabled={!output}
+                  onClick={() => {
+                    void navigator.clipboard
+                      .writeText(output)
+                      .then(() => setNotice(t("side.copied")))
+                      .catch(() => setFailure(t("side.copyFailed")));
+                  }}
+                >
+                  {t("side.copyResult")}
+                </Button>
+              </div>
             </header>
             {output ? (
               <div class="side-output side-reading" aria-live="polite">
@@ -945,11 +1098,16 @@ export function SidePanel({
         <div class="side-feedback side-error" role="alert">
           <strong>{t("side.errorTitle")}</strong>
           <p>{failureText}</p>
-          {activeTab === "translate" && retryTool && source.trim() && (
-            <Button disabled={working} onClick={() => void execute(retryTool)}>
-              {t("side.retry")}
-            </Button>
-          )}
+          {activeTab === "translate" &&
+            retryTool &&
+            (source.trim() || attachment) && (
+              <Button
+                disabled={working}
+                onClick={() => void execute(retryTool)}
+              >
+                {t("side.retry")}
+              </Button>
+            )}
         </div>
       )}
       {notice && (
@@ -972,6 +1130,9 @@ export function SidePanel({
                       disabled={working}
                       onClick={() => {
                         edited.current = true;
+                        imageRevision.current += 1;
+                        setImageLoading(false);
+                        setAttachment(undefined);
                         setSource(item.source);
                         setOutput(item.translation);
                         setResultSource(item.source);

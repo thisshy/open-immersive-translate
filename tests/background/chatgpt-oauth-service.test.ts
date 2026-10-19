@@ -293,6 +293,70 @@ describe("ChatgptOauthService", () => {
     expect(onPartial).toHaveBeenLastCalledWith("流式译文");
   });
 
+  it("attaches an image only to the final user turn and returns ordinary translated text", async () => {
+    const accessToken = jwt({ exp: Math.floor(Date.now() / 1_000) + 3_600 });
+    state.stored[CHATGPT_AUTH_STORAGE_KEY] = {
+      tokens: storedTokens(accessToken),
+    };
+    const fetchMock = vi.fn(async () =>
+      sseResponse([
+        'data: {"type":"response.output_text.delta","delta":"图片译文"}\n\n',
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ChatgptOauthService({ model: "gpt-6.1-sol" });
+    const dataUrl = "data:image/png;base64,aGVsbG8=";
+
+    await expect(
+      service.completePrompt(
+        {
+          kind: "translate",
+          text: "保留表格",
+          service: "chatgpt",
+          image: { dataUrl },
+          history: [
+            { role: "user", content: "旧问题" },
+            { role: "assistant", content: "旧回答" },
+          ],
+        },
+        new AbortController().signal,
+      ),
+    ).resolves.toBe("图片译文");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.instructions).toContain("识别图片中的文字");
+    expect(body.input).toEqual([
+      { role: "user", content: [{ type: "input_text", text: "旧问题" }] },
+      { role: "assistant", content: [{ type: "output_text", text: "旧回答" }] },
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "保留表格" },
+          { type: "input_image", image_url: dataUrl, detail: "auto" },
+        ],
+      },
+    ]);
+  });
+
+  it("rejects malformed images before fetching models or requesting translation", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ChatgptOauthService();
+    const imageRequest = {
+      kind: "translate" as const,
+      text: "",
+      service: "chatgpt",
+      image: { dataUrl: "data:text/html;base64,aGVsbG8=" },
+    };
+    await expect(
+      service.completePrompt(imageRequest, new AbortController().signal),
+    ).rejects.toThrow("图片仅支持");
+    await expect(
+      service.onPartial(imageRequest, vi.fn(), new AbortController().signal),
+    ).rejects.toThrow("图片仅支持");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("refreshes once after a 401 and retries with the new token", async () => {
     const nowSeconds = Math.floor(Date.now() / 1_000);
     const oldAccess = jwt({

@@ -95,6 +95,24 @@ describe("assistant runtime port", () => {
 });
 
 describe("runAssistant", () => {
+  it("rejects invalid image input before discovering capabilities or dispatching", async () => {
+    const client: AssistantClient = {
+      complete: vi.fn(),
+      supportsStreaming: vi.fn(),
+      stream: vi.fn(),
+    };
+    await expect(
+      runAssistant(
+        client,
+        { ...request, image: { dataUrl: "https://example.com/image.png" } },
+        vi.fn(),
+      ),
+    ).rejects.toThrow("图片仅支持");
+    expect(client.supportsStreaming).not.toHaveBeenCalled();
+    expect(client.complete).not.toHaveBeenCalled();
+    expect(client.stream).not.toHaveBeenCalled();
+  });
+
   it("uses partial output for a streaming adapter", async () => {
     const onPartial = vi.fn();
     const client: AssistantClient = {

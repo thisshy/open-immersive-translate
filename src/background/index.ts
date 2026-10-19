@@ -42,6 +42,10 @@ import {
   listServices,
 } from "./services";
 import { TranslateError, type TranslationService } from "./services/base";
+import {
+  assertAssistantRequestSupported,
+  completeAssistantRequest,
+} from "./services/assistant";
 import { runServiceTest } from "./service-test";
 import {
   cancelChatgptOauth,
@@ -149,34 +153,7 @@ async function runAssistantRequest(
   signal.throwIfAborted();
   const { service, config } = await configuredService(request.service);
   signal.throwIfAborted();
-  if (request.kind === "translate") {
-    const result = await service.translate(
-      {
-        texts: [request.text],
-        from: request.from ?? config.sourceLanguage,
-        to: request.to ?? config.targetLanguage,
-        glossary: config.glossaries,
-        variant: "selection",
-      },
-      signal,
-    );
-    const error = result.errors?.[0];
-    if (error) {
-      throw new TranslateError("unknown", error.message, {
-        serviceId: request.service,
-        retryable: error.retryable,
-      });
-    }
-    return result.texts[0] ?? "";
-  }
-  if (!service.completePrompt) {
-    throw new TranslateError(
-      "invalid_config",
-      `Translation service ${request.service} does not support AI assistant actions.`,
-      { serviceId: request.service, retryable: false },
-    );
-  }
-  return service.completePrompt(request, signal);
+  return completeAssistantRequest(request, service, config, signal);
 }
 
 async function testService(serviceId: string, unsavedConfig?: ServiceConfig) {
@@ -326,6 +303,7 @@ browser.runtime.onConnect.addListener((port) => {
     void configuredService(request.service)
       .then(async ({ service }) => {
         controller.signal.throwIfAborted();
+        assertAssistantRequestSupported(request, service);
         const emit = (text: string): void => {
           if (!disconnected) {
             port.postMessage({

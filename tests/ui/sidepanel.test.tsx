@@ -35,6 +35,7 @@ const browserMock = vi.hoisted(() => {
     tabs: {
       query: vi.fn(),
       sendMessage: vi.fn(),
+      captureVisibleTab: vi.fn(),
       create: vi.fn().mockResolvedValue(undefined),
       onActivated: tabEvent(activatedListeners),
       onUpdated: tabEvent(updatedListeners),
@@ -55,9 +56,24 @@ import { SidePanel } from "../../src/ui/sidepanel/index";
 
 let storage: Record<string, unknown>;
 let session: Record<string, unknown>;
-let currentTab: { id: number; title: string; url: string };
+let currentTab: { id: number; title: string; url: string; windowId?: number };
 let translated: Set<number>;
 const writeClipboard = vi.fn().mockResolvedValue(undefined);
+const IMAGE_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=";
+
+function pasteImage(element: Element): void {
+  const bytes = Uint8Array.from(
+    atob(IMAGE_DATA_URL.split(",")[1]!),
+    (character) => character.charCodeAt(0),
+  );
+  const file = new File([bytes], "clipboard.png", { type: "image/png" });
+  fireEvent.paste(element, {
+    clipboardData: {
+      items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+    },
+  });
+}
 
 function idleAssistant(): AssistantClient {
   return {
@@ -73,7 +89,12 @@ beforeEach(() => {
     kSidePanelHistory: [],
   };
   session = {};
-  currentTab = { id: 8, title: "Article", url: "https://example.com/article" };
+  currentTab = {
+    id: 8,
+    title: "Article",
+    url: "https://example.com/article",
+    windowId: 2,
+  };
   translated = new Set();
   browserMock.messageListeners.clear();
   browserMock.activatedListeners.clear();
@@ -81,6 +102,9 @@ beforeEach(() => {
   browserMock.tabs.query
     .mockReset()
     .mockImplementation(async () => [{ ...currentTab }]);
+  browserMock.tabs.captureVisibleTab
+    .mockReset()
+    .mockResolvedValue(IMAGE_DATA_URL);
   browserMock.tabs.sendMessage
     .mockReset()
     .mockImplementation(async (id, message) => {
@@ -225,6 +249,113 @@ describe("SidePanel", () => {
         .querySelector<HTMLElement>(".side-shell")!
         .style.getPropertyValue("--side-font-size"),
     ).toBe("17px");
+  });
+
+  it("previews a pasted image and only submits its image-only translation when requested", async () => {
+    const assistant = idleAssistant();
+    render(<SidePanel assistant={assistant} />);
+    const source =
+      await screen.findByLabelText<HTMLTextAreaElement>("输入要翻译的文字");
+    pasteImage(source);
+    const preview = await screen.findByRole<HTMLImageElement>("img", {
+      name: "待翻译的图片",
+    });
+    expect(preview.src).toBe(IMAGE_DATA_URL);
+    expect(source.value).toBe("");
+    expect(assistant.supportsStreaming).not.toHaveBeenCalled();
+    expect(assistant.complete).not.toHaveBeenCalled();
+    expect(assistant.stream).not.toHaveBeenCalled();
+    const translate = screen.getByRole<HTMLButtonElement>("button", {
+      name: "翻译图片",
+    });
+    expect(translate.disabled).toBe(false);
+    fireEvent.click(translate);
+    await waitFor(() =>
+      expect(assistant.complete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "translate",
+          service: "chatgpt",
+          text: "请翻译图片中的文字。",
+          image: { dataUrl: IMAGE_DATA_URL },
+        }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(storage.kSidePanelHistory).toEqual([]);
+  });
+
+  it("restores an image draft without translating and prevents empty submission after removal", async () => {
+    const assistant = idleAssistant();
+    const view = render(<SidePanel assistant={assistant} />);
+    pasteImage(await screen.findByLabelText("输入要翻译的文字"));
+    await screen.findByRole("img", { name: "待翻译的图片" });
+    await waitFor(() =>
+      expect(session.kSidePanelDraft).toEqual(
+        expect.objectContaining({
+          source: "",
+          image: { dataUrl: IMAGE_DATA_URL, name: "clipboard.png" },
+        }),
+      ),
+    );
+    view.unmount();
+    render(<SidePanel assistant={assistant} />);
+    const restored = await screen.findByRole<HTMLImageElement>("img", {
+      name: "待翻译的图片",
+    });
+    expect(restored.src).toBe(IMAGE_DATA_URL);
+    expect(assistant.supportsStreaming).not.toHaveBeenCalled();
+    expect(assistant.complete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "移除图片" }));
+    expect(screen.queryByRole("img", { name: "待翻译的图片" })).toBeNull();
+    const translate = screen.getByRole<HTMLButtonElement>("button", {
+      name: "翻译文字",
+    });
+    expect(translate.disabled).toBe(true);
+    fireEvent.click(translate);
+    expect(assistant.complete).not.toHaveBeenCalled();
+    expect(assistant.stream).not.toHaveBeenCalled();
+  });
+
+  it("previews a captured webpage without using the model until translation is requested", async () => {
+    const assistant = idleAssistant();
+    render(<SidePanel assistant={assistant} />);
+    await screen.findByLabelText("输入要翻译的文字");
+    fireEvent.click(screen.getByRole("button", { name: "截取网页" }));
+    await screen.findByRole("img", { name: "待翻译的图片" });
+    expect(browserMock.tabs.captureVisibleTab).toHaveBeenCalledWith(2, {
+      format: "png",
+    });
+    expect(assistant.supportsStreaming).not.toHaveBeenCalled();
+    expect(assistant.complete).not.toHaveBeenCalled();
+    expect(assistant.stream).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "翻译图片" }));
+    await waitFor(() =>
+      expect(assistant.complete).toHaveBeenCalledWith(
+        expect.objectContaining({ image: { dataUrl: IMAGE_DATA_URL } }),
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("explains that image translation requires ChatGPT before making any model request", async () => {
+    storage.config = {
+      ...structuredClone(DEFAULT_CONFIG),
+      uiLanguage: "zh-CN",
+      service: "google",
+      sidePanel: { ...DEFAULT_CONFIG.sidePanel, service: "google" },
+    };
+    const assistant = idleAssistant();
+    render(<SidePanel assistant={assistant} />);
+    pasteImage(await screen.findByLabelText("输入要翻译的文字"));
+    await screen.findByRole("img", { name: "待翻译的图片" });
+    fireEvent.click(screen.getByRole("button", { name: "翻译图片" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "图片翻译目前支持 ChatGPT 账号（OAuth），请在设置中切换翻译服务。",
+    );
+    expect(assistant.supportsStreaming).not.toHaveBeenCalled();
+    expect(assistant.complete).not.toHaveBeenCalled();
+    expect(assistant.stream).not.toHaveBeenCalled();
   });
 
   it("stops the request and keeps partial output without adding completed history", async () => {
